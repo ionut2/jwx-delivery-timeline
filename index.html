@@ -161,16 +161,18 @@ function slugify(s){return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^
 function ensureLanes(){tasks.forEach(t=>{if(!LANES.some(l=>l.team===t.team)){
   LANES.push({team:t.team, short:t.team, label:'Team '+t.team, fill:'#F1EFE8', ink:'#444441', custom:true});}});}
 function addTeam(){
-  const name=(window.prompt('New team name:')||'').trim(); if(!name)return;
-  const ids=new Set(LANES.map(l=>l.team)); let base='t-'+slugify(name), id=base, i=2;
-  while(ids.has(id)){id=base+'-'+(i++);}
+  const name=(window.prompt(‘New team name:’)||’’).trim(); if(!name)return;
+  const ids=new Set(LANES.map(l=>l.team)); let base=’t-’+slugify(name), id=base, i=2;
+  while(ids.has(id)){id=base+’-’+(i++);}
   const pal=TEAM_PALETTE[LANES.filter(l=>l.custom).length % TEAM_PALETTE.length];
-  LANES.push({team:id, short:name, label:'Team '+name, fill:pal.fill, ink:pal.ink, custom:true});
-  saveTeams(); render(); setStatus('Added team “'+name+'” — pick it from any item’s dropdown',true);
+  LANES.push({team:id, short:name, label:’Team ‘+name, fill:pal.fill, ink:pal.ink, custom:true});
+  saveTeams(); render(); setStatus(‘Added team “’+name+’” — pick it from any item’s dropdown’,true);
+  markDirty();
 }
 function removeTeam(id){
-  if(tasks.some(t=>t.team===id)){setStatus('Move this team’s items elsewhere before removing it',false);return;}
-  LANES=LANES.filter(l=>l.team!==id); saveTeams(); render(); setStatus('Team removed',true);
+  if(tasks.some(t=>t.team===id)){setStatus(‘Move this team’s items elsewhere before removing it’,false);return;}
+  LANES=LANES.filter(l=>l.team!==id); saveTeams(); render(); setStatus(‘Team removed’,true);
+  markDirty();
 }
 const TYPE={MVP:{bg:'#5B51C6'},GA:{bg:'#1D9E75'},DEV:{bg:'#EF9F27',fg:'#412402'},DONE:{bg:'#97C459',fg:'#173404'}};
 const BASELINE=[
@@ -213,7 +215,8 @@ function setStatus(txt,state){const el=document.getElementById('status');if(!el)
   el.style.color=state===true||state==='ok'?'var(--ga-d)':state==='warn'?'#B45309':state==='err'?'var(--err)':'var(--mut)';}
 function save(){try{localStorage.setItem(KEY,JSON.stringify(tasks));localStorage.setItem(KEY+'_ts',Date.now());saveTeams();
     if(!cloudEnabled())setStatus('Saved '+new Date().toLocaleTimeString()+' — reloads on refresh',true);}
-  catch(e){setStatus('Could not save — browser storage is blocked',false);}}
+  catch(e){setStatus('Could not save — browser storage is blocked',false);}
+  markDirty();}
 async function saveToCloud(label){
   if(!cloudEnabled())return;
   setStatus('Saving to cloud…');
@@ -231,6 +234,15 @@ async function saveToCloud(label){
   }catch(e){
     setStatus('⚠ Cloud save failed — try Save now','err');
   }
+}
+function markDirty(){
+  if(!cloudEnabled())return;
+  isDirty=true;
+  setStatus('● Unsaved changes','warn');
+  if(!autoSaveTimer)autoSaveTimer=setTimeout(async()=>{
+    autoSaveTimer=null;
+    if(isDirty)await saveToCloud('Auto-saved');
+  },60000);
 }
 async function loadFromCloud(){
   if(!cloudEnabled())return null;
