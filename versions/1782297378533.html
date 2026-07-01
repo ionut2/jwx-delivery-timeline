@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<script type="application/json" id="cowork-artifact-meta">
+{
+  "name": "Jwx Delivery Timeline",
+  "schemaVersion": 1,
+  "description": "Interactive, editable JWX Unified Platform delivery timeline (final baked plan). Drag bars to move, drag the right edge to extend, reassign teams via dropdown or drag; MVP/GA dates and the dependency check recompute live. Edits persist in the browser (localStorage) with Save, Reset, Export, and Import. Self-contained, no external data."
+}
+</script>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>JWX Unified Platform — Interactive Delivery Timeline</title>
+<style>
+  :root{
+    color-scheme:light;
+    --mvp:#5B51C6; --mvp-d:#3C3489;
+    --ga:#1D9E75; --ga-d:#0F6E56;
+    --dev:#EF9F27; --dev-d:#854F0B;
+    --done:#97C459; --done-d:#27500A;
+    --err:#E24B4A;
+    --ink:#2C2C2A; --mut:#5F5E5A; --faint:#888780;
+    --line:#E5E3DB; --bg:#FFFFFF; --panel:#FAFAF7;
+    --gutter:310px; --weekw:88px; --rowh:60px;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:#F1EFE8;color:var(--ink);font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif;}
+  .page{max-width:1700px;margin:0 auto;padding:22px 26px 60px;}
+  h1{font-size:26px;font-weight:600;color:var(--mvp-d);margin:0 0 4px;}
+  .sub{color:var(--mut);font-size:15px;margin:0 0 18px;}
+  .chips{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px;}
+  .chip{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px 16px;min-width:150px;}
+  .chip .k{font-size:12px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em;}
+  .chip .v{font-size:20px;font-weight:600;margin-top:2px;}
+  .chip.mvp{border-color:var(--mvp);} .chip.mvp .v{color:var(--mvp-d);}
+  .chip.ga{border-color:var(--ga);} .chip.ga .v{color:var(--ga-d);}
+  .chip.dep .v{font-size:16px;}
+  .chip.dep.ok .v{color:var(--ga-d);} .chip.dep.bad .v{color:var(--err);}
+  .toolbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px;}
+  button{font:inherit;border:1px solid var(--line);background:var(--bg);color:var(--ink);
+    border-radius:8px;padding:8px 14px;cursor:pointer;}
+  button:hover{border-color:var(--mut);}
+  .hint{color:var(--faint);font-size:13px;}
+  .hint b{color:var(--mut);font-weight:600;}
+  .saved{color:var(--ga-d);font-size:13px;opacity:0;transition:opacity .3s;}
+  .saved.show{opacity:1;}
+  .status{font-size:13px;color:var(--mut);font-weight:500;}
+  .frame{background:var(--bg);border:1px solid var(--line);border-radius:12px;overflow:hidden;}
+  .scroll{overflow-x:auto;}
+  .inner{position:relative;}
+  .hrow{display:flex;height:54px;border-bottom:1px solid var(--line);}
+  .hrow .gut{position:sticky;left:0;z-index:6;width:var(--gutter);flex:0 0 var(--gutter);
+    background:var(--bg);border-right:1px solid var(--line);display:flex;align-items:flex-end;
+    padding:0 12px 8px;font-size:12px;color:var(--faint);}
+  .wcells{display:flex;}
+  .wc{width:var(--weekw);flex:0 0 var(--weekw);text-align:center;border-right:1px solid var(--line);
+    padding-top:8px;font-size:12px;color:var(--mut);}
+  .wc b{display:block;color:var(--ink);font-size:13px;font-weight:600;}
+  .lanesWrap{position:relative;}
+  .lane{position:relative;}
+  .lhead{display:flex;height:30px;align-items:center;}
+  .lhead .gut{position:sticky;left:0;z-index:6;width:var(--gutter);flex:0 0 var(--gutter);
+    height:30px;display:flex;align-items:center;padding:0 12px;font-size:13px;font-weight:600;}
+  .lhead .band{flex:1;height:30px;}
+  .row{display:flex;height:var(--rowh);align-items:center;}
+  .row .gut{position:sticky;left:0;z-index:6;width:var(--gutter);flex:0 0 var(--gutter);
+    height:var(--rowh);display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:5px;
+    padding:6px 12px;background:var(--bg);border-right:1px solid var(--line);
+    text-align:right;font-size:13.5px;}
+  .row .gut .nm{white-space:normal;line-height:1.25;width:100%;text-align:right;}
+  .row .gut .ctl{display:flex;align-items:center;gap:8px;}
+  .badge{flex:0 0 auto;font-size:11px;font-weight:600;border-radius:5px;padding:1px 6px;color:#fff;}
+  .track{position:relative;height:var(--rowh);}
+  .bar{position:absolute;top:18px;height:24px;border-radius:5px;color:#fff;
+    font-size:11.5px;font-weight:600;display:flex;align-items:center;padding:0 8px;
+    cursor:grab;user-select:none;white-space:nowrap;overflow:hidden;z-index:3;touch-action:none;
+    box-shadow:0 1px 2px rgba(0,0,0,.12);}
+  .bar:active{cursor:grabbing;}
+  .bar .handle{position:absolute;right:0;top:0;width:11px;height:100%;cursor:ew-resize;
+    border-radius:0 5px 5px 0;background:rgba(255,255,255,.28);}
+  .bar.locked{cursor:default;opacity:.92;}
+  .bar.violation{outline:2.5px solid var(--err);outline-offset:1px;}
+  .bar.dragging{z-index:50;opacity:.92;box-shadow:0 6px 16px rgba(0,0,0,.22);}
+  .lane.drop{box-shadow:inset 0 0 0 2px var(--mvp);border-radius:6px;}
+  .tsel{font-size:11px;border:1px solid var(--line);border-radius:5px;padding:1px 2px;
+    color:var(--mut);background:var(--bg);max-width:78px;flex:0 0 auto;cursor:pointer;}
+  .tsel:hover{border-color:var(--mut);}
+  .lrm{margin-left:auto;cursor:pointer;color:#A32D2D;font-weight:600;font-size:12px;border:none;background:transparent;padding:0 4px;flex:0 0 auto;}
+  .lrm:hover{color:#791F1F;}
+  .lhead .gut .lname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .gridcol{position:absolute;top:0;bottom:0;width:1px;background:var(--line);z-index:0;}
+  .mline{position:absolute;top:0;bottom:0;width:0;border-left:2px dashed;z-index:2;}
+  .mlabel{position:absolute;top:-2px;font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;color:#fff;transform:translateX(-50%);}
+  .legend{display:flex;gap:20px;flex-wrap:wrap;margin-top:16px;font-size:13px;color:var(--mut);}
+  .legend .it{display:flex;align-items:center;gap:7px;}
+  .sw{width:22px;height:14px;border-radius:4px;display:inline-block;}
+  .note{margin-top:14px;font-size:13px;color:var(--faint);max-width:1100px;line-height:1.6;}
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>JWX Unified Platform — Interactive Delivery Timeline</h1>
+  <p class="sub">Drag a bar to move it (or onto another team's lane). Drag its right edge to extend duration. Dates recompute live.</p>
+
+  <div class="chips">
+    <div class="chip mvp"><div class="k">MVP live</div><div class="v" id="m-mvp">—</div></div>
+    <div class="chip ga"><div class="k">Full GA</div><div class="v" id="m-ga">—</div></div>
+    <div class="chip"><div class="k">Total span</div><div class="v" id="m-span">—</div></div>
+    <div class="chip dep" id="m-depchip"><div class="k">Dependency</div><div class="v" id="m-dep">—</div></div>
+  </div>
+
+  <div class="toolbar">
+    <button id="save">Save now</button>
+    <button id="export">Export</button>
+    <button id="import">Import</button>
+    <input type="file" id="importFile" accept="application/json,.json" style="display:none"/>
+    <button id="addteam">+ Add team</button>
+    <button id="reset">↺ Reset to baseline</button>
+    <span class="status" id="status">—</span>
+    <span class="hint">Snap: <b>½ week</b> · Move: drag body · Extend: drag right edge · Reassign team: <b>drag onto a lane or dropdown</b> · edits auto-save in this browser</span>
+  </div>
+
+  <div class="frame"><div class="scroll"><div class="inner" id="inner"></div></div></div>
+
+  <div class="legend">
+    <div class="it"><span class="sw" style="background:var(--mvp)"></span>MVP (ships first)</div>
+    <div class="it"><span class="sw" style="background:var(--ga)"></span>General availability</div>
+    <div class="it"><span class="sw" style="background:var(--dev)"></span>In development</div>
+    <div class="it"><span class="sw" style="background:var(--done)"></span>Done</div>
+    <div class="it"><span class="sw" style="background:var(--mvp-d)"></span>MVP milestone</div>
+    <div class="it"><span class="sw" style="background:var(--ga-d)"></span>GA milestone</div>
+    <div class="it">S=1–2 bd · M≈1w · L≈2w · XL≈4w (range 2–6)</div>
+  </div>
+
+  <p class="note">Critical path: <b>Ad viewability</b> (gating, XL) → <b>Ad playback mode</b> (L) sets the MVP date — Playback Mode cannot start before Viewability finishes; the dependency chip turns red if you violate it. Weeks are business weeks starting Mon Jun 15, 2026 (5 business days each). Durations shown are live; the size badge keeps the original T-shirt estimate so you can see drift. Changes persist in this browser only.</p>
+</div>
+
+<script>
+const _cs=getComputedStyle(document.documentElement);
+const _n=(k,d)=>{const v=parseFloat(_cs.getPropertyValue(k));return v||d;};
+const WEEKW=_n('--weekw',88), GUT=_n('--gutter',310), ROWH=_n('--rowh',60), LHEAD=30, HEADER=54;
+const DEFAULT_LANES=[
+  {team:'inflight', short:'In flight', label:'In flight / wrapping (pre-Jun 15)', fill:'#F1EFE8', ink:'#444441'},
+  {team:'pubmon',   short:'Pub Mon', label:'Team Pub Monetization — gating MVP path', fill:'#EEEDFE', ink:'#3C3489'},
+  {team:'exchange', short:'Exchange', label:'Team Exchange — GAM Spotlight + parity API items', fill:'#E1F5EE', ink:'#085041'},
+  {team:'auction',  short:'Auction', label:'Team Auction — unconstrained; heavy parity items', fill:'#E6F1FB', ink:'#0C447C'},
+];
+const TEAM_PALETTE=[
+  {fill:'#FAECE7', ink:'#993C1D'},{fill:'#FBEAF0', ink:'#993556'},{fill:'#FAEEDA', ink:'#854F0B'},
+  {fill:'#EAF3DE', ink:'#3B6D11'},{fill:'#E6F1FB', ink:'#0C447C'},{fill:'#F1EFE8', ink:'#444441'},
+];
+const TEAMKEY='jwx_timeline_teams_final';
+function loadTeams(){try{const r=localStorage.getItem(TEAMKEY);if(r){const c=JSON.parse(r);if(Array.isArray(c))return c.map(x=>Object.assign({},x,{custom:true}));}}catch(e){}return [];}
+let LANES=DEFAULT_LANES.concat(loadTeams());
+function saveTeams(){try{localStorage.setItem(TEAMKEY,JSON.stringify(LANES.filter(l=>l.custom)));}catch(e){}}
+function slugify(s){return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'')||'team';}
+function ensureLanes(){tasks.forEach(t=>{if(!LANES.some(l=>l.team===t.team)){
+  LANES.push({team:t.team, short:t.team, label:'Team '+t.team, fill:'#F1EFE8', ink:'#444441', custom:true});}});}
+function addTeam(){
+  const name=(window.prompt('New team name:')||'').trim(); if(!name)return;
+  const ids=new Set(LANES.map(l=>l.team)); let base='t-'+slugify(name), id=base, i=2;
+  while(ids.has(id)){id=base+'-'+(i++);}
+  const pal=TEAM_PALETTE[LANES.filter(l=>l.custom).length % TEAM_PALETTE.length];
+  LANES.push({team:id, short:name, label:'Team '+name, fill:pal.fill, ink:pal.ink, custom:true});
+  saveTeams(); render(); setStatus('Added team “'+name+'” — pick it from any item’s dropdown',true);
+}
+function removeTeam(id){
+  if(tasks.some(t=>t.team===id)){setStatus('Move this team’s items elsewhere before removing it',false);return;}
+  LANES=LANES.filter(l=>l.team!==id); saveTeams(); render(); setStatus('Team removed',true);
+}
+const TYPE={MVP:{bg:'#5B51C6'},GA:{bg:'#1D9E75'},DEV:{bg:'#EF9F27',fg:'#412402'},DONE:{bg:'#97C459',fg:'#173404'}};
+const BASELINE=[
+  {id:'jwdata', name:'JW playback → ad dashboard data (in work, due Jun 15)', team:'pubmon', s:0, dur:5, size:'—', type:'DEV', mvp:true},
+  {id:'prefetch',name:'Prefetching', team:'pubmon', s:9.5, dur:1.5, size:'M', type:'MVP'},
+  {id:'viewability',name:'Ad viewability policy setup', team:'pubmon', s:3, dur:6.5, size:'XL', type:'MVP'},
+  {id:'playback',name:'Ad playback mode', team:'pubmon', s:9.5, dur:3.5, size:'L', type:'MVP', dep:'viewability'},
+  {id:'lineviewability',name:'Line item viewability enforcement', team:'pubmon', s:9.5, dur:1, size:'M', type:'MVP'},
+  {id:'segment',name:'Ad server segmentation (multi-property)', team:'exchange', s:8.5, dur:6.5, size:'XL', type:'GA'},
+  {id:'postroll',name:'Postroll exposed in dashboard', team:'pubmon', s:16, dur:1.5, size:'S', type:'GA'},
+  {id:'gam',  name:'GAM mediation Spotlight (pre-roll)', team:'exchange', s:1, dur:5.5, size:'L', type:'GA'},
+  {id:'meta', name:'Expose ad metadata (JS API)', team:'exchange', s:6.5, dur:2, size:'M', type:'GA'},
+  {id:'preroll',name:'Extend pre-roll break', team:'auction', s:12, dur:2, size:'M', type:'GA'},
+  {id:'lineitem',name:'External line item (first-class)', team:'exchange', s:15, dur:3, size:'M', type:'GA'},
+  {id:'midrolls',name:'Fixed number of midrolls (cap in dashboard)', team:'exchange', s:18, dur:1, size:'M', type:'GA'},
+  {id:'pods', name:'Ad pods support', team:'pubmon', s:5, dur:5, size:'XL', type:'MVP'},
+  {id:'que',  name:'Que points (fixed)', team:'pubmon', s:12, dur:4, size:'L', type:'GA'},
+];
+const LOCKED=new Set([]);
+const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+const KEY='jwx_timeline_state_final';
+function clone(a){return JSON.parse(JSON.stringify(a));}
+// Merge-load: BASELINE supplies items + static fields (name/type/size/flags);
+// saved state overlays the user's editable fields (start, duration, team).
+function load(){
+  try{const r=localStorage.getItem(KEY);
+    if(r){let saved=JSON.parse(r);
+      // migration: prefetch is now an active MVP item — ignore stale "done/in-flight" override
+      saved=saved.filter(x=>!(x.id==='prefetch' && x.team==='inflight'));
+      return BASELINE.map(b=>{const s=saved.find(x=>x.id===b.id);
+        return s?Object.assign(clone(b),{s:+s.s,dur:+s.dur,team:s.team}):clone(b);});}
+  }catch(e){}
+  return clone(BASELINE);
+}
+let tasks=load();
+ensureLanes();
+function setStatus(txt,ok){const el=document.getElementById('status');if(!el)return;
+  el.textContent=txt;el.style.color=ok?'var(--ga-d)':'var(--mut)';}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(tasks));localStorage.setItem(KEY+'_ts',Date.now());
+    setStatus('Saved '+new Date().toLocaleTimeString()+' — reloads on refresh',true);}
+  catch(e){setStatus('Could not save — browser storage is blocked',false);}}
+function clearSaved(){try{localStorage.removeItem(KEY);localStorage.removeItem(KEY+'_ts');}catch(e){}}
+function applyOverlay(arr){return BASELINE.map(b=>{const s=arr.find(x=>x.id===b.id);
+  return s?Object.assign(clone(b),{
+    s:Number.isFinite(+s.s)?Math.max(0,+s.s):b.s,
+    dur:Number.isFinite(+s.dur)?Math.max(0.5,+s.dur):b.dur,
+    team:s.team||b.team}):clone(b);});}
+function exportState(){const payload={app:'jwx-timeline',version:1,exportedAt:new Date().toISOString(),tasks};
+  const text=JSON.stringify(payload,null,2);
+  const blob=new Blob([text],{type:'application/json'});const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download='jwx-timeline-'+new Date().toISOString().slice(0,10)+'.json';
+  document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
+  setStatus('Exported plan to a JSON file',true);}
+function importState(file){const fr=new FileReader();
+  fr.onload=()=>{try{const data=JSON.parse(fr.result);const arr=Array.isArray(data)?data:(data&&data.tasks);
+    if(!Array.isArray(arr)||!arr.length)throw 0;
+    tasks=applyOverlay(arr);render();save();setStatus('Imported plan from '+file.name,true);}
+    catch(e){setStatus('Import failed — not a valid timeline JSON file',false);}};
+  fr.readAsText(file);}
+function snap(v){return Math.round(v*2)/2;}
+
+// n-th business day from Mon Jun 15 2026 (Jun15 = day 1)
+function bizDate(n){n=Math.max(1,Math.round(n));let d=new Date(2026,5,15),c=0;
+  while(true){const g=d.getDay();if(g!==0&&g!==6){c++;if(c>=n)return new Date(d);}d.setDate(d.getDate()+1);}}
+function fmt(d){return MONTHS[d.getMonth()]+' '+d.getDate();}
+function startDate(t){return bizDate(t.s*5+1);}
+function endDate(t){return bizDate((t.s+t.dur)*5);}
+function durLabel(t){const bd=Math.round(t.dur*5);return t.dur>=1?(Number.isInteger(t.dur)?t.dur+'w':t.dur+'w')+' · '+bd+'bd':bd+' bd';}
+
+function nWeeks(){let m=12;tasks.forEach(t=>m=Math.max(m,Math.ceil(t.s+t.dur)));return m+2;}
+
+function render(){
+  const inner=document.getElementById('inner');
+  const nw=nWeeks(), width=GUT+nw*WEEKW;
+  inner.style.width=width+'px';
+  inner.innerHTML='';
+
+  // header
+  const h=document.createElement('div');h.className='hrow';
+  const hg=document.createElement('div');hg.className='gut';hg.textContent='Team / work item';h.appendChild(hg);
+  const wc=document.createElement('div');wc.className='wcells';
+  for(let i=0;i<nw;i++){const c=document.createElement('div');c.className='wc';
+    c.innerHTML='<b>W'+(i+1)+'</b>'+fmt(bizDate(i*5+1));wc.appendChild(c);}
+  h.appendChild(wc);inner.appendChild(h);
+
+  const wrap=document.createElement('div');wrap.className='lanesWrap';wrap.id='lanesWrap';
+
+  LANES.forEach(L=>{
+    const lane=document.createElement('div');lane.className='lane';lane.dataset.team=L.team;
+    const lh=document.createElement('div');lh.className='lhead';
+    const lg=document.createElement('div');lg.className='lhead-gut gut';lg.style.background=L.fill;lg.style.color=L.ink;
+    const lnm=document.createElement('span');lnm.className='lname';lnm.textContent=L.label;lg.appendChild(lnm);
+    if(L.custom){const x=document.createElement('button');x.className='lrm';x.textContent='✕';x.title='Remove team (must have no items)';x.onclick=()=>removeTeam(L.team);lg.appendChild(x);}
+    const lb=document.createElement('div');lb.className='band';lb.style.background=L.fill;
+    lh.appendChild(lg);lh.appendChild(lb);lane.appendChild(lh);
+
+    const items=tasks.filter(t=>t.team===L.team).sort((a,b)=>a.s-b.s||a.dur-b.dur);
+    if(items.length===0){const r=document.createElement('div');r.className='row';
+      const g=document.createElement('div');g.className='gut';g.style.color='#bbb';g.innerHTML='<span class="nm">— drop items here —</span>';
+      const tr=document.createElement('div');tr.className='track';tr.style.width=(nw*WEEKW)+'px';
+      r.appendChild(g);r.appendChild(tr);lane.appendChild(r);}
+    items.forEach(t=>{
+      const r=document.createElement('div');r.className='row';
+      const g=document.createElement('div');g.className='gut';
+      const nm=document.createElement('span');nm.className='nm';nm.textContent=t.name;
+      g.appendChild(nm);
+      const ctl=document.createElement('div');ctl.className='ctl';
+      if(!LOCKED.has(t.id)){
+        const sel=document.createElement('select');sel.className='tsel';sel.title='Move to team';
+        const teamOpts=LANES.filter(l=>l.team!=='inflight').map(l=>[l.team,l.short||l.team]);
+        teamOpts.forEach(([v,l])=>{const o=document.createElement('option');o.value=v;o.textContent=l;if(t.team===v)o.selected=true;sel.appendChild(o);});
+        if(!teamOpts.some(o=>o[0]===t.team)){const o=document.createElement('option');o.value=t.team;o.textContent=((LANES.find(l=>l.team===t.team)||{}).short)||t.team;o.selected=true;sel.insertBefore(o,sel.firstChild);}
+        sel.addEventListener('change',()=>{t.team=sel.value;render();save();});
+        sel.addEventListener('pointerdown',e=>e.stopPropagation());
+        ctl.appendChild(sel);
+      }
+      const bd=document.createElement('span');bd.className='badge';
+      const ty=TYPE[t.type];bd.style.background=ty.bg;bd.style.color=ty.fg||'#fff';
+      bd.textContent=t.size!=='—'?t.size:(t.mvp?'MVP':(t.type==='DONE'?'done':'·'));
+      ctl.appendChild(bd);
+      g.appendChild(ctl);
+      const tr=document.createElement('div');tr.className='track';tr.style.width=(nw*WEEKW)+'px';
+      // gridlines
+      for(let i=0;i<=nw;i++){const gl=document.createElement('div');gl.className='gridcol';gl.style.left=(i*WEEKW)+'px';tr.appendChild(gl);}
+      const bar=buildBar(t);tr.appendChild(bar);
+      r.appendChild(g);r.appendChild(tr);lane.appendChild(r);
+    });
+    wrap.appendChild(lane);
+  });
+  inner.appendChild(wrap);
+  drawMilestones(wrap,nw);
+  updateMetrics();
+}
+
+function buildBar(t){
+  const bar=document.createElement('div');bar.className='bar';bar.dataset.id=t.id;
+  const ty=TYPE[t.type];bar.style.background=ty.bg;if(ty.fg)bar.style.color=ty.fg;
+  if(LOCKED.has(t.id))bar.classList.add('locked');
+  positionBar(bar,t);
+  if(!LOCKED.has(t.id)){
+    const hd=document.createElement('div');hd.className='handle';bar.appendChild(hd);
+    bar.addEventListener('pointerdown',e=>{if(e.target===hd)return;startDrag(e,t,'move');});
+    hd.addEventListener('pointerdown',e=>{e.stopPropagation();startDrag(e,t,'resize');});
+  }
+  return bar;
+}
+function barLabel(t){const dl=t.dur*WEEKW;const txt=t.size!=='—'?(t.size+' · '+durLabel(t)):(t.type==='DEV'?'In Dev':'Done');
+  return dl<70?(t.size!=='—'?t.size:'•'):txt;}
+function positionBar(bar,t){
+  bar.style.left=(t.s*WEEKW)+'px';bar.style.width=Math.max(18,t.dur*WEEKW)+'px';
+  const hd=bar.querySelector('.handle');bar.textContent=barLabel(t);if(hd)bar.appendChild(hd);
+  bar.title=t.name+'\n'+(t.size!=='—'?'Size '+t.size+' · ':'')+durLabel(t)+'\n'+fmt(startDate(t))+' → '+fmt(endDate(t));
+}
+
+function startDrag(e,t,mode){
+  e.preventDefault();
+  const bar=document.querySelector('.bar[data-id="'+t.id+'"]');
+  const startX=e.clientX,startY=e.clientY,origS=t.s,origD=t.dur;
+  if(mode==='move')bar.classList.add('dragging');
+  function highlight(y){document.querySelectorAll('.lane.drop').forEach(l=>l.classList.remove('drop'));
+    document.querySelectorAll('.lane').forEach(l=>{const r=l.getBoundingClientRect();if(y>=r.top&&y<=r.bottom)l.classList.add('drop');});}
+  function mv(ev){const dW=(ev.clientX-startX)/WEEKW;
+    if(mode==='move'){t.s=Math.max(0,origS+dW);bar.style.transform='translateY('+(ev.clientY-startY)+'px)';highlight(ev.clientY);}
+    else{t.dur=Math.max(0.5,origD+dW);}
+    positionBar(bar,t);updateMetrics();}
+  function up(ev){document.removeEventListener('pointermove',mv);document.removeEventListener('pointerup',up);
+    document.querySelectorAll('.lane.drop').forEach(l=>l.classList.remove('drop'));
+    if(mode==='move'){const team=laneAtY(ev.clientY);if(team)t.team=team;t.s=Math.max(0,snap(t.s));}
+    else{t.dur=Math.max(0.5,snap(t.dur));}
+    render();save();}
+  document.addEventListener('pointermove',mv);document.addEventListener('pointerup',up);
+}
+function laneAtY(y){let found=null;document.querySelectorAll('.lane').forEach(l=>{
+  const r=l.getBoundingClientRect();if(y>=r.top&&y<=r.bottom)found=l.dataset.team;});return found;}
+
+function drawMilestones(wrap,nw){
+  const mvpEnd=Math.max(...tasks.filter(t=>t.type==='MVP'||t.mvp).map(t=>t.s+t.dur),0);
+  const gaEnd=Math.max(...tasks.map(t=>t.s+t.dur),0);
+  [{w:mvpEnd,c:'#3C3489',lab:'MVP'},{w:gaEnd,c:'#0F6E56',lab:'GA'}].forEach(m=>{
+    if(m.w<=0)return;const x=GUT+m.w*WEEKW;
+    const ln=document.createElement('div');ln.className='mline';ln.style.left=x+'px';ln.style.borderColor=m.c;wrap.appendChild(ln);
+    const lb=document.createElement('div');lb.className='mlabel';lb.style.left=x+'px';lb.style.background=m.c;lb.textContent=m.lab;wrap.appendChild(lb);
+  });
+}
+
+function updateMetrics(){
+  const mvpEnd=Math.max(...tasks.filter(t=>t.type==='MVP'||t.mvp).map(t=>t.s+t.dur),0);
+  const gaEnd=Math.max(...tasks.map(t=>t.s+t.dur),0);
+  document.getElementById('m-mvp').textContent=mvpEnd>0?fmt(bizDate(mvpEnd*5)):'—';
+  document.getElementById('m-ga').textContent=gaEnd>0?fmt(bizDate(gaEnd*5)):'—';
+  document.getElementById('m-span').textContent=gaEnd.toFixed(1).replace(/\.0$/,'')+' weeks';
+  // dependency: playback must start at/after viewability end
+  const v=tasks.find(t=>t.id==='viewability'),p=tasks.find(t=>t.id==='playback');
+  const chip=document.getElementById('m-depchip'),el=document.getElementById('m-dep');
+  let bad=false;
+  if(v&&p){bad=p.s < (v.s+v.dur)-1e-9;
+    el.textContent=bad?'Violated — Playback before Viewability':'OK — Playback after Viewability';}
+  chip.classList.toggle('ok',!bad);chip.classList.toggle('bad',bad);
+  const pb=document.querySelector('.bar[data-id="playback"]');if(pb)pb.classList.toggle('violation',bad);
+}
+
+document.getElementById('save').addEventListener('click',save);
+document.getElementById('export').addEventListener('click',exportState);
+document.getElementById('import').addEventListener('click',()=>document.getElementById('importFile').click());
+document.getElementById('importFile').addEventListener('change',e=>{const f=e.target.files[0];if(f)importState(f);e.target.value='';});
+document.getElementById('addteam').addEventListener('click',addTeam);
+document.getElementById('reset').addEventListener('click',()=>{tasks=clone(BASELINE);LANES=DEFAULT_LANES.slice();clearSaved();
+  try{localStorage.removeItem(TEAMKEY);}catch(e){}render();
+  setStatus('Reset to baseline — saved edits & added teams cleared',false);});
+render();
+(function(){let raw=null;try{raw=localStorage.getItem(KEY);}catch(e){}
+  if(raw){const ts=parseInt(localStorage.getItem(KEY+'_ts'))||0;
+    setStatus('Restored your saved edits'+(ts?(' from '+new Date(ts).toLocaleString()):''),true);}
+  else setStatus('Baseline plan — every change auto-saves to this browser',false);})();
+</script>
+</body>
+</html>
