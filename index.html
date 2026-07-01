@@ -117,7 +117,7 @@
     <button id="addteam">+ Add team</button>
     <button id="reset">↺ Reset to baseline</button>
     <span class="status" id="status">—</span>
-    <span class="hint">Snap: <b>½ week</b> · Move: drag body · Extend: drag right edge · Reassign team: <b>drag onto a lane or dropdown</b> · edits auto-save in this browser</span>
+    <span class="hint">Snap: <b>½ week</b> · Move: drag body · Extend: drag right edge · Reassign team: <b>drag onto a lane or dropdown</b> · auto-saves locally; click <b>Save now</b> to sync to cloud</span>
   </div>
 
   <div class="frame"><div class="scroll"><div class="inner" id="inner"></div></div></div>
@@ -270,7 +270,7 @@ async function init(){
   }
   const arr=Array.isArray(data)?data:(data&&data.tasks);
   if(!Array.isArray(arr)||!arr.length){
-    setStatus('Baseline plan — cloud storage is empty');
+    setStatus('Baseline plan — cloud storage is empty',false);
     return;
   }
   if(data&&Array.isArray(data.teams)){
@@ -298,7 +298,7 @@ function importState(file){const fr=new FileReader();
     if(!Array.isArray(arr)||!arr.length)throw 0;
     if(data&&Array.isArray(data.teams)){
       LANES=DEFAULT_LANES.concat(data.teams.filter(t=>t&&t.team).map(t=>Object.assign({},t,{custom:true})));saveTeams();}
-    tasks=applyOverlay(arr);ensureLanes();render();save();setStatus('Imported plan from '+file.name,true);}
+    tasks=applyOverlay(arr);ensureLanes();render();save();saveToCloud('Imported');setStatus('Imported plan from '+file.name,true);}
     catch(e){setStatus('Import failed — not a valid timeline JSON file',false);}};
   fr.readAsText(file);}
 function snap(v){return Math.round(v*2)/2;}
@@ -459,6 +459,8 @@ document.getElementById('reset').addEventListener('click',async()=>{
   if(cloudEnabled()){await saveToCloud();}
   else{setStatus('Reset to baseline — saved edits & added teams cleared',false);}
 });
+// render() must run before init(): init() may return early on cloud failure and the page
+// must already show localStorage data for the offline fallback to work correctly.
 render();
 init();
 </script>
