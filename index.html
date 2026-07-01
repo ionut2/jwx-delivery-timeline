@@ -232,6 +232,43 @@ async function saveToCloud(label){
     setStatus('⚠ Cloud save failed — try Save now','err');
   }
 }
+async function loadFromCloud(){
+  if(!cloudEnabled())return null;
+  try{
+    const r=await fetch('https://api.jsonbin.io/v3/b/'+CLOUD_BIN_ID+'/latest',{
+      headers:{'X-Master-Key':CLOUD_API_KEY}});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const envelope=await r.json();
+    return envelope.record||envelope;
+  }catch(e){return null;}
+}
+async function init(){
+  if(!cloudEnabled()){
+    let raw=null;try{raw=localStorage.getItem(KEY);}catch(e){}
+    if(raw){const ts=parseInt(localStorage.getItem(KEY+'_ts'))||0;
+      setStatus('Restored your saved edits'+(ts?(' from '+new Date(ts).toLocaleString()):''),true);}
+    else setStatus('Baseline plan — every change auto-saves to this browser',false);
+    return;
+  }
+  setStatus('Syncing…');
+  const data=await loadFromCloud();
+  if(data===null){
+    setStatus('⚠ Cloud unavailable — working offline','err');
+    return;
+  }
+  const arr=Array.isArray(data)?data:(data&&data.tasks);
+  if(!Array.isArray(arr)||!arr.length){
+    setStatus('Baseline plan — cloud storage is empty');
+    return;
+  }
+  if(data&&Array.isArray(data.teams)){
+    LANES=DEFAULT_LANES.concat(data.teams.filter(t=>t&&t.team).map(t=>Object.assign({},t,{custom:true})));
+    saveTeams();
+  }
+  tasks=applyOverlay(arr);ensureLanes();render();
+  const when=data.exportedAt?(' — '+new Date(data.exportedAt).toLocaleString()):'';
+  setStatus('Synced from cloud'+when,'ok');
+}
 function clearSaved(){try{localStorage.removeItem(KEY);localStorage.removeItem(KEY+'_ts');}catch(e){}}
 function applyOverlay(arr){return BASELINE.map(b=>{const s=arr.find(x=>x.id===b.id);
   return s?Object.assign(clone(b),{
@@ -403,14 +440,15 @@ document.getElementById('export').addEventListener('click',exportState);
 document.getElementById('import').addEventListener('click',()=>document.getElementById('importFile').click());
 document.getElementById('importFile').addEventListener('change',e=>{const f=e.target.files[0];if(f)importState(f);e.target.value='';});
 document.getElementById('addteam').addEventListener('click',addTeam);
-document.getElementById('reset').addEventListener('click',()=>{tasks=clone(BASELINE);LANES=DEFAULT_LANES.slice();clearSaved();
-  try{localStorage.removeItem(TEAMKEY);}catch(e){}render();
-  setStatus('Reset to baseline — saved edits & added teams cleared',false);});
+document.getElementById('reset').addEventListener('click',async()=>{
+  tasks=clone(BASELINE);LANES=DEFAULT_LANES.slice();clearSaved();
+  try{localStorage.removeItem(TEAMKEY);}catch(e){}
+  render();
+  if(cloudEnabled()){await saveToCloud();}
+  else{setStatus('Reset to baseline — saved edits & added teams cleared',false);}
+});
 render();
-(function(){let raw=null;try{raw=localStorage.getItem(KEY);}catch(e){}
-  if(raw){const ts=parseInt(localStorage.getItem(KEY+'_ts'))||0;
-    setStatus('Restored your saved edits'+(ts?(' from '+new Date(ts).toLocaleString()):''),true);}
-  else setStatus('Baseline plan — every change auto-saves to this browser',false);})();
+init();
 </script>
 </body>
 </html>
