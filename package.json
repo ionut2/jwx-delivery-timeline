@@ -1,0 +1,12 @@
+{
+  "name": "jwx-timeline",
+  "private": true,
+  "devDependencies": {
+    "@playwright/test": "^1.49.1"
+  },
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:report": "playwright show-report"
+  }
+}

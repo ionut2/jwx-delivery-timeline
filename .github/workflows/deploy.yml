@@ -14,7 +14,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ── Run the full Playwright test suite ──────────────────────────────────────
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run tests
+        run: npm test
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14
+
+  # ── Deploy to GitHub Pages (only when tests pass) ───────────────────────────
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -36,6 +66,9 @@ jobs:
           with open('index.html', 'w') as f:
               f.write(html)
           PYEOF
+
+      - name: Remove test infrastructure from deploy
+        run: rm -rf tests/ playwright.config.js package.json package-lock.json node_modules/
 
       - uses: actions/configure-pages@v4
         with:
