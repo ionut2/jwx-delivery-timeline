@@ -490,3 +490,62 @@ test.describe('Cloud Sync (mocked API)', () => {
     await expect(page.locator('#status')).toContainText('Unsaved changes');
   });
 });
+
+// ─── Data model: scope / status ───────────────────────────────────────────────
+
+test.describe('Scope & status model', () => {
+  test('exported tasks carry scope and status, not type', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const dlPromise = page.waitForEvent('download');
+    await page.click('#export');
+    const dl = await dlPromise;
+    const tmp = path.join(os.tmpdir(), `export-scope-${Date.now()}.json`);
+    await dl.saveAs(tmp);
+    const { tasks } = JSON.parse(fs.readFileSync(tmp, 'utf8'));
+    expect(tasks).toHaveLength(14);
+    for (const t of tasks) {
+      expect(['MVP', 'GA']).toContain(t.scope);
+      expect(['planned', 'in-dev', 'done']).toContain(t.status);
+      expect(t).not.toHaveProperty('type');
+      expect(t).not.toHaveProperty('dep');
+    }
+  });
+
+  test('bar fill and handle are siblings, never nested', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const bar = page.locator('.bar[data-id="viewability"]');
+    await expect(bar.locator('> .bar-fill')).toHaveCount(1);
+    await expect(bar.locator('> .bar-label')).toHaveCount(1);
+    await expect(bar.locator('> .handle')).toHaveCount(1);
+    // A mask on .bar-fill must not be able to hide the resize handle.
+    await expect(bar.locator('.bar-fill .handle')).toHaveCount(0);
+  });
+
+  test('scope drives the fill colour', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const mvp = await page.locator('.bar[data-id="viewability"] > .bar-fill')
+      .evaluate(el => getComputedStyle(el).backgroundColor);
+    const ga = await page.locator('.bar[data-id="gam"] > .bar-fill')
+      .evaluate(el => getComputedStyle(el).backgroundColor);
+    expect(mvp).toBe('rgb(91, 81, 198)');
+    expect(ga).toBe('rgb(29, 158, 117)');
+  });
+
+  test('in-dev status is marked on the fill', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    await expect(page.locator('.bar[data-id="jwdata"] > .bar-fill.indev')).toHaveCount(1);
+    await expect(page.locator('.bar[data-id="viewability"] > .bar-fill.indev')).toHaveCount(0);
+  });
+
+  test('dependency chip is removed', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    await expect(page.locator('#m-depchip')).toHaveCount(0);
+    await expect(page.locator('.chips .chip')).toHaveCount(3);
+    await expect(page.locator('.bar.violation')).toHaveCount(0);
+  });
+});

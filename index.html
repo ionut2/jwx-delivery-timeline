@@ -34,8 +34,6 @@
   .chip .v{font-size:20px;font-weight:600;margin-top:2px;}
   .chip.mvp{border-color:var(--mvp);} .chip.mvp .v{color:var(--mvp-d);}
   .chip.ga{border-color:var(--ga);} .chip.ga .v{color:var(--ga-d);}
-  .chip.dep .v{font-size:16px;}
-  .chip.dep.ok .v{color:var(--ga-d);} .chip.dep.bad .v{color:var(--err);}
   .toolbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px;}
   button{font:inherit;border:1px solid var(--line);background:var(--bg);color:var(--ink);
     border-radius:8px;padding:8px 14px;cursor:pointer;}
@@ -74,12 +72,13 @@
   .bar{position:absolute;top:18px;height:24px;border-radius:5px;color:#fff;
     font-size:11.5px;font-weight:600;display:flex;align-items:center;padding:0 8px;
     cursor:grab;user-select:none;white-space:nowrap;overflow:hidden;z-index:3;touch-action:none;
+    background:transparent;}
+  .bar-fill{position:absolute;left:0;top:0;right:0;bottom:0;border-radius:5px;
     box-shadow:0 1px 2px rgba(0,0,0,.12);}
+  .bar-label{position:relative;z-index:1;pointer-events:none;overflow:hidden;text-overflow:ellipsis;}
   .bar:active{cursor:grabbing;}
   .bar .handle{position:absolute;right:0;top:0;width:11px;height:100%;cursor:ew-resize;
-    border-radius:0 5px 5px 0;background:rgba(255,255,255,.28);}
-  .bar.locked{cursor:default;opacity:.92;}
-  .bar.violation{outline:2.5px solid var(--err);outline-offset:1px;}
+    border-radius:0 5px 5px 0;background:rgba(255,255,255,.28);z-index:2;}
   .bar.dragging{z-index:50;opacity:.92;box-shadow:0 6px 16px rgba(0,0,0,.22);}
   .lane.drop{box-shadow:inset 0 0 0 2px var(--mvp);border-radius:6px;}
   .tsel{font-size:11px;border:1px solid var(--line);border-radius:5px;padding:1px 2px;
@@ -106,7 +105,6 @@
     <div class="chip mvp"><div class="k">MVP live</div><div class="v" id="m-mvp">—</div></div>
     <div class="chip ga"><div class="k">Full GA</div><div class="v" id="m-ga">—</div></div>
     <div class="chip"><div class="k">Total span</div><div class="v" id="m-span">—</div></div>
-    <div class="chip dep" id="m-depchip"><div class="k">Dependency</div><div class="v" id="m-dep">—</div></div>
   </div>
 
   <div class="toolbar">
@@ -132,7 +130,7 @@
     <div class="it">S=1–2 bd · M≈1w · L≈2w · XL≈4w (range 2–6)</div>
   </div>
 
-  <p class="note">Critical path: <b>Ad viewability</b> (gating, XL) → <b>Ad playback mode</b> (L) sets the MVP date — Playback Mode cannot start before Viewability finishes; the dependency chip turns red if you violate it. Weeks are business weeks starting Mon Jun 15, 2026 (5 business days each). Durations shown are live; the size badge keeps the original T-shirt estimate so you can see drift. Changes persist in this browser only.</p>
+  <p class="note">Weeks are business weeks starting Mon Jun 15, 2026 (5 business days each). Bar colour shows scope — purple for MVP, green for GA — and texture shows progress: a hatched bar is done, a bar that fades out on its right edge is in development. Durations shown are live; the size badge keeps the original T-shirt estimate so you can see drift. Changes save automatically — to the shared plan when cloud sync is on, otherwise to this browser only.</p>
 </div>
 
 <script>
@@ -174,24 +172,23 @@ function removeTeam(id){
   LANES=LANES.filter(l=>l.team!==id); saveTeams(); render(); setStatus('Team removed',true);
   markDirty();
 }
-const TYPE={MVP:{bg:'#5B51C6'},GA:{bg:'#1D9E75'},DEV:{bg:'#EF9F27',fg:'#412402'},DONE:{bg:'#97C459',fg:'#173404'}};
+const SCOPE={MVP:{bg:'#5B51C6'},GA:{bg:'#1D9E75'}};
 const BASELINE=[
-  {id:'jwdata', name:'JW playback → ad dashboard data (in work, due Jun 15)', team:'pubmon', s:0, dur:5, size:'—', type:'DEV', mvp:true},
-  {id:'prefetch',name:'Prefetching', team:'pubmon', s:9.5, dur:1.5, size:'M', type:'MVP'},
-  {id:'viewability',name:'Ad viewability policy setup', team:'pubmon', s:3, dur:6.5, size:'XL', type:'MVP'},
-  {id:'playback',name:'Ad playback mode', team:'pubmon', s:9.5, dur:3.5, size:'L', type:'MVP', dep:'viewability'},
-  {id:'lineviewability',name:'Line item viewability enforcement', team:'pubmon', s:9.5, dur:1, size:'M', type:'MVP'},
-  {id:'segment',name:'Ad server segmentation (multi-property)', team:'exchange', s:8.5, dur:6.5, size:'XL', type:'GA'},
-  {id:'postroll',name:'Postroll exposed in dashboard', team:'pubmon', s:16, dur:1.5, size:'S', type:'GA'},
-  {id:'gam',  name:'GAM mediation Spotlight (pre-roll)', team:'exchange', s:1, dur:5.5, size:'L', type:'GA'},
-  {id:'meta', name:'Expose ad metadata (JS API)', team:'exchange', s:6.5, dur:2, size:'M', type:'GA'},
-  {id:'preroll',name:'Extend pre-roll break', team:'auction', s:12, dur:2, size:'M', type:'GA'},
-  {id:'lineitem',name:'External line item (first-class)', team:'exchange', s:15, dur:3, size:'M', type:'GA'},
-  {id:'midrolls',name:'Fixed number of midrolls (cap in dashboard)', team:'exchange', s:18, dur:1, size:'M', type:'GA'},
-  {id:'pods', name:'Ad pods support', team:'pubmon', s:5, dur:5, size:'XL', type:'MVP'},
-  {id:'que',  name:'Que points (fixed)', team:'pubmon', s:12, dur:4, size:'L', type:'GA'},
+  {id:'jwdata', name:'JW playback → ad dashboard data (in work, due Jun 15)', team:'pubmon', s:0, dur:5, size:'—', scope:'MVP', status:'in-dev'},
+  {id:'prefetch',name:'Prefetching', team:'pubmon', s:9.5, dur:1.5, size:'M', scope:'MVP', status:'planned'},
+  {id:'viewability',name:'Ad viewability policy setup', team:'pubmon', s:3, dur:6.5, size:'XL', scope:'MVP', status:'planned'},
+  {id:'playback',name:'Ad playback mode', team:'pubmon', s:9.5, dur:3.5, size:'L', scope:'MVP', status:'planned'},
+  {id:'lineviewability',name:'Line item viewability enforcement', team:'pubmon', s:9.5, dur:1, size:'M', scope:'MVP', status:'planned'},
+  {id:'segment',name:'Ad server segmentation (multi-property)', team:'exchange', s:8.5, dur:6.5, size:'XL', scope:'GA', status:'planned'},
+  {id:'postroll',name:'Postroll exposed in dashboard', team:'pubmon', s:16, dur:1.5, size:'S', scope:'GA', status:'planned'},
+  {id:'gam',  name:'GAM mediation Spotlight (pre-roll)', team:'exchange', s:1, dur:5.5, size:'L', scope:'GA', status:'planned'},
+  {id:'meta', name:'Expose ad metadata (JS API)', team:'exchange', s:6.5, dur:2, size:'M', scope:'GA', status:'planned'},
+  {id:'preroll',name:'Extend pre-roll break', team:'auction', s:12, dur:2, size:'M', scope:'GA', status:'planned'},
+  {id:'lineitem',name:'External line item (first-class)', team:'exchange', s:15, dur:3, size:'M', scope:'GA', status:'planned'},
+  {id:'midrolls',name:'Fixed number of midrolls (cap in dashboard)', team:'exchange', s:18, dur:1, size:'M', scope:'GA', status:'planned'},
+  {id:'pods', name:'Ad pods support', team:'pubmon', s:5, dur:5, size:'XL', scope:'MVP', status:'planned'},
+  {id:'que',  name:'Que points (fixed)', team:'pubmon', s:12, dur:4, size:'L', scope:'GA', status:'planned'},
 ];
-const LOCKED=new Set([]);
 const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 const KEY='jwx_timeline_state_final';
@@ -349,18 +346,16 @@ function render(){
       const nm=document.createElement('span');nm.className='nm';nm.textContent=t.name;
       g.appendChild(nm);
       const ctl=document.createElement('div');ctl.className='ctl';
-      if(!LOCKED.has(t.id)){
-        const sel=document.createElement('select');sel.className='tsel';sel.title='Move to team';
-        const teamOpts=LANES.filter(l=>l.team!=='inflight').map(l=>[l.team,l.short||l.team]);
-        teamOpts.forEach(([v,l])=>{const o=document.createElement('option');o.value=v;o.textContent=l;if(t.team===v)o.selected=true;sel.appendChild(o);});
-        if(!teamOpts.some(o=>o[0]===t.team)){const o=document.createElement('option');o.value=t.team;o.textContent=((LANES.find(l=>l.team===t.team)||{}).short)||t.team;o.selected=true;sel.insertBefore(o,sel.firstChild);}
-        sel.addEventListener('change',()=>{t.team=sel.value;render();save();});
-        sel.addEventListener('pointerdown',e=>e.stopPropagation());
-        ctl.appendChild(sel);
-      }
+      const sel=document.createElement('select');sel.className='tsel';sel.title='Move to team';
+      const teamOpts=LANES.filter(l=>l.team!=='inflight').map(l=>[l.team,l.short||l.team]);
+      teamOpts.forEach(([v,l])=>{const o=document.createElement('option');o.value=v;o.textContent=l;if(t.team===v)o.selected=true;sel.appendChild(o);});
+      if(!teamOpts.some(o=>o[0]===t.team)){const o=document.createElement('option');o.value=t.team;o.textContent=((LANES.find(l=>l.team===t.team)||{}).short)||t.team;o.selected=true;sel.insertBefore(o,sel.firstChild);}
+      sel.addEventListener('change',()=>{t.team=sel.value;render();save();});
+      sel.addEventListener('pointerdown',e=>e.stopPropagation());
+      ctl.appendChild(sel);
       const bd=document.createElement('span');bd.className='badge';
-      const ty=TYPE[t.type];bd.style.background=ty.bg;bd.style.color=ty.fg||'#fff';
-      bd.textContent=t.size!=='—'?t.size:(t.mvp?'MVP':(t.type==='DONE'?'done':'·'));
+      bd.style.background=SCOPE[t.scope].bg;bd.style.color='#fff';
+      bd.textContent=t.size!=='—'?t.size:'·';
       ctl.appendChild(bd);
       g.appendChild(ctl);
       const tr=document.createElement('div');tr.className='track';tr.style.width=(nw*WEEKW)+'px';
@@ -378,21 +373,26 @@ function render(){
 
 function buildBar(t){
   const bar=document.createElement('div');bar.className='bar';bar.dataset.id=t.id;
-  const ty=TYPE[t.type];bar.style.background=ty.bg;if(ty.fg)bar.style.color=ty.fg;
-  if(LOCKED.has(t.id))bar.classList.add('locked');
+  const fill=document.createElement('div');fill.className='bar-fill';bar.appendChild(fill);
+  const lab=document.createElement('span');lab.className='bar-label';bar.appendChild(lab);
+  // The handle is a SIBLING of .bar-fill, never a child: .bar-fill carries a CSS
+  // mask for in-dev items, and a mask applies to its whole subtree — nesting the
+  // handle would fade out the drag-to-extend affordance.
+  const hd=document.createElement('div');hd.className='handle';bar.appendChild(hd);
+  bar.addEventListener('pointerdown',e=>{if(e.target===hd)return;startDrag(e,t,'move');});
+  hd.addEventListener('pointerdown',e=>{e.stopPropagation();startDrag(e,t,'resize');});
   positionBar(bar,t);
-  if(!LOCKED.has(t.id)){
-    const hd=document.createElement('div');hd.className='handle';bar.appendChild(hd);
-    bar.addEventListener('pointerdown',e=>{if(e.target===hd)return;startDrag(e,t,'move');});
-    hd.addEventListener('pointerdown',e=>{e.stopPropagation();startDrag(e,t,'resize');});
-  }
   return bar;
 }
-function barLabel(t){const dl=t.dur*WEEKW;const txt=t.size!=='—'?(t.size+' · '+durLabel(t)):(t.type==='DEV'?'In Dev':'Done');
+function barLabel(t){const dl=t.dur*WEEKW;
+  const txt=t.size!=='—'?(t.size+' · '+durLabel(t)):durLabel(t);
   return dl<70?(t.size!=='—'?t.size:'•'):txt;}
 function positionBar(bar,t){
   bar.style.left=(t.s*WEEKW)+'px';bar.style.width=Math.max(18,t.dur*WEEKW)+'px';
-  const hd=bar.querySelector('.handle');bar.textContent=barLabel(t);if(hd)bar.appendChild(hd);
+  const fill=bar.querySelector('.bar-fill');
+  fill.className='bar-fill'+(t.status==='done'?' done':t.status==='in-dev'?' indev':'');
+  fill.style.background=SCOPE[t.scope].bg;
+  bar.querySelector('.bar-label').textContent=barLabel(t);
   bar.title=t.name+'\n'+(t.size!=='—'?'Size '+t.size+' · ':'')+durLabel(t)+'\n'+fmt(startDate(t))+' → '+fmt(endDate(t));
 }
 
@@ -417,9 +417,14 @@ function startDrag(e,t,mode){
 function laneAtY(y){let found=null;document.querySelectorAll('.lane').forEach(l=>{
   const r=l.getBoundingClientRect();if(y>=r.top&&y<=r.bottom)found=l.dataset.team;});return found;}
 
+// Single home for the MVP-membership rule: Tasks 4 and 5 both assert on it, and
+// drawMilestones/updateMetrics must never disagree about where the lines fall.
+function milestoneEnds(){return {
+  mvp:Math.max(...tasks.filter(t=>t.scope==='MVP').map(t=>t.s+t.dur),0),
+  ga:Math.max(...tasks.map(t=>t.s+t.dur),0)};}
+
 function drawMilestones(wrap,nw){
-  const mvpEnd=Math.max(...tasks.filter(t=>t.type==='MVP'||t.mvp).map(t=>t.s+t.dur),0);
-  const gaEnd=Math.max(...tasks.map(t=>t.s+t.dur),0);
+  const {mvp:mvpEnd,ga:gaEnd}=milestoneEnds();
   [{w:mvpEnd,c:'#3C3489',lab:'MVP'},{w:gaEnd,c:'#0F6E56',lab:'GA'}].forEach(m=>{
     if(m.w<=0)return;const x=GUT+m.w*WEEKW;
     const ln=document.createElement('div');ln.className='mline';ln.style.left=x+'px';ln.style.borderColor=m.c;wrap.appendChild(ln);
@@ -428,19 +433,10 @@ function drawMilestones(wrap,nw){
 }
 
 function updateMetrics(){
-  const mvpEnd=Math.max(...tasks.filter(t=>t.type==='MVP'||t.mvp).map(t=>t.s+t.dur),0);
-  const gaEnd=Math.max(...tasks.map(t=>t.s+t.dur),0);
+  const {mvp:mvpEnd,ga:gaEnd}=milestoneEnds();
   document.getElementById('m-mvp').textContent=mvpEnd>0?fmt(bizDate(mvpEnd*5)):'—';
   document.getElementById('m-ga').textContent=gaEnd>0?fmt(bizDate(gaEnd*5)):'—';
   document.getElementById('m-span').textContent=gaEnd.toFixed(1).replace(/\.0$/,'')+' weeks';
-  // dependency: playback must start at/after viewability end
-  const v=tasks.find(t=>t.id==='viewability'),p=tasks.find(t=>t.id==='playback');
-  const chip=document.getElementById('m-depchip'),el=document.getElementById('m-dep');
-  let bad=false;
-  if(v&&p){bad=p.s < (v.s+v.dur)-1e-9;
-    el.textContent=bad?'Violated — Playback before Viewability':'OK — Playback after Viewability';}
-  chip.classList.toggle('ok',!bad);chip.classList.toggle('bad',bad);
-  const pb=document.querySelector('.bar[data-id="playback"]');if(pb)pb.classList.toggle('violation',bad);
 }
 
 document.getElementById('save').addEventListener('click',async()=>{
