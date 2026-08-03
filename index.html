@@ -97,6 +97,9 @@
     border:1px solid var(--line);background:var(--bg);color:var(--mut);min-width:46px;}
   .statbtn.indev{border-color:var(--dev);color:var(--dev-d);background:#FDF3E3;}
   .statbtn.done{border-color:var(--done);color:var(--done-d);background:#F0F7E6;}
+  .irm{cursor:pointer;color:#A32D2D;font-weight:600;font-size:12px;border:none;
+    background:transparent;padding:0 2px;flex:0 0 auto;}
+  .irm:hover{color:#791F1F;}
   .lrm{margin-left:auto;cursor:pointer;color:#A32D2D;font-weight:600;font-size:12px;border:none;background:transparent;padding:0 4px;flex:0 0 auto;}
   .lrm:hover{color:#791F1F;}
   .lhead .gut .lname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -191,6 +194,10 @@ const STATUS_NEXT={planned:'in-dev','in-dev':'done',done:'planned'};
 const STATUS_LABEL={planned:'planned','in-dev':'in dev',done:'done'};
 function cycleStatus(id){const t=tasks.find(x=>x.id===id);if(!t)return;
   t.status=STATUS_NEXT[t.status]||'planned';render();save();}
+function removeTask(id){const t=tasks.find(x=>x.id===id);if(!t)return;
+  if(!window.confirm('Delete "'+t.name+'"? This cannot be undone.'))return;
+  tasks=tasks.filter(x=>x.id!==id);
+  render();save();setStatus('Deleted “'+t.name+'”',true);}
 const SCOPE={MVP:{bg:'#5B51C6'},GA:{bg:'#1D9E75'}};
 const BASELINE=[
   {id:'jwdata', name:'JW playback → ad dashboard data (in work, due Jun 15)', team:'pubmon', s:0, dur:5, size:'—', scope:'MVP', status:'in-dev'},
@@ -427,6 +434,11 @@ function render(){
       bd.style.background=SCOPE[t.scope].bg;bd.style.color='#fff';
       bd.textContent=t.size!=='—'?t.size:'·';
       ctl.appendChild(bd);
+      const rm=document.createElement('button');rm.className='irm';rm.dataset.id=t.id;
+      rm.textContent='✕';rm.title='Delete this work item';
+      rm.addEventListener('click',()=>removeTask(t.id));
+      rm.addEventListener('pointerdown',e=>e.stopPropagation());
+      ctl.appendChild(rm);
       g.appendChild(ctl);
       const tr=document.createElement('div');tr.className='track';tr.style.width=(nw*WEEKW)+'px';
       // gridlines

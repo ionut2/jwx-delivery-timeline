@@ -799,3 +799,64 @@ test.describe('Status cycle', () => {
     expect(after).toBeGreaterThan(before);
   });
 });
+
+// ─── Delete items ────────────────────────────────────────────────────────────
+
+test.describe('Delete work items', () => {
+  test('confirming removes the item', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    page.once('dialog', d => d.accept());
+    await page.click('.irm[data-id="midrolls"]');
+    await expect(page.locator('.bar')).toHaveCount(13);
+    await expect(page.locator('.bar[data-id="midrolls"]')).toHaveCount(0);
+  });
+
+  test('dismissing the confirm keeps the item', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    page.once('dialog', d => d.dismiss());
+    await page.click('.irm[data-id="midrolls"]');
+    await page.waitForTimeout(300);
+    await expect(page.locator('.bar')).toHaveCount(14);
+  });
+
+  test('a deleted item stays deleted after reload', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    page.once('dialog', d => d.accept());
+    await page.click('.irm[data-id="midrolls"]');
+    await page.click('#save');
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.bar')).toHaveCount(13);
+    await expect(page.locator('.bar[data-id="midrolls"]')).toHaveCount(0);
+  });
+
+  test('the item delete button does not collide with the team one', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    // .lrm belongs to lane headers only; item rows use .irm
+    await expect(page.locator('.row .gut .lrm')).toHaveCount(0);
+    await expect(page.locator('.lhead .irm')).toHaveCount(0);
+  });
+
+  test('deleting every item leaves a working empty page that survives reload', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(v2 => localStorage.setItem('jwx_timeline_state_final', v2), V2([
+      { id: 'solo', name: 'Last one', team: 'auction', s: 0, dur: 1, size: 'M', scope: 'GA', status: 'planned' },
+    ]));
+    await page.reload();
+    await waitForBars(page);
+    page.once('dialog', d => d.accept());
+    await page.click('.irm[data-id="solo"]');
+    await expect(page.locator('.bar')).toHaveCount(0);
+    await expect(page.locator('#m-mvp')).toHaveText('—');
+    await expect(page.locator('#m-ga')).toHaveText('—');
+    await page.click('#save');
+    await page.reload();
+    await waitForInit(page);
+    await expect(page.locator('.bar')).toHaveCount(0);   // BASELINE must NOT come back
+    await expect(page.locator('#status')).toContainText('No work items');
+  });
+});
