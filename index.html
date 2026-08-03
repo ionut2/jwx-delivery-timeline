@@ -100,6 +100,9 @@
   .irm{cursor:pointer;color:#A32D2D;font-weight:600;font-size:12px;border:none;
     background:transparent;padding:0 2px;flex:0 0 auto;}
   .irm:hover{color:#791F1F;}
+  .ladd{margin-left:auto;font-size:10px;padding:1px 6px;border-radius:5px;cursor:pointer;flex:0 0 auto;
+    border:1px solid rgba(0,0,0,.14);background:rgba(255,255,255,.72);color:inherit;}
+  .ladd:hover{background:#fff;}
   .lrm{margin-left:auto;cursor:pointer;color:#A32D2D;font-weight:600;font-size:12px;border:none;background:transparent;padding:0 4px;flex:0 0 auto;}
   .lrm:hover{color:#791F1F;}
   .lhead .gut .lname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -198,6 +201,15 @@ function removeTask(id){const t=tasks.find(x=>x.id===id);if(!t)return;
   if(!window.confirm('Delete "'+t.name+'"? This cannot be undone.'))return;
   tasks=tasks.filter(x=>x.id!==id);
   render();save();setStatus('Deleted “'+t.name+'”',true);}
+function addTask(team){
+  const name=(window.prompt('New work item name:')||'').trim(); if(!name)return;
+  const ids=new Set(tasks.map(t=>t.id)); let base='i-'+slugify(name),id=base,i=2;
+  while(ids.has(id)){id=base+'-'+(i++);}
+  const inLane=tasks.filter(t=>t.team===team);
+  const s=inLane.length?Math.max(...inLane.map(t=>t.s+t.dur)):0;
+  tasks.push({id,name,team,s,dur:1,size:'M',scope:'GA',status:'planned'});
+  render();save();setStatus('Added “'+name+'” — drag it into place',true);
+}
 const SCOPE={MVP:{bg:'#5B51C6'},GA:{bg:'#1D9E75'}};
 const BASELINE=[
   {id:'jwdata', name:'JW playback → ad dashboard data (in work, due Jun 15)', team:'pubmon', s:0, dur:5, size:'—', scope:'MVP', status:'in-dev'},
@@ -397,6 +409,12 @@ function render(){
     const lg=document.createElement('div');lg.className='lhead-gut gut';lg.style.background=L.fill;lg.style.color=L.ink;
     const lnm=document.createElement('span');lnm.className='lname';lnm.textContent=L.label;lg.appendChild(lnm);
     if(L.custom){const x=document.createElement('button');x.className='lrm';x.textContent='✕';x.title='Remove team (must have no items)';x.onclick=()=>removeTeam(L.team);lg.appendChild(x);}
+    if(L.team!=='inflight'){
+      const ad=document.createElement('button');ad.className='ladd';ad.dataset.team=L.team;
+      ad.textContent='+ item';ad.title='Add a work item to this team';
+      ad.addEventListener('click',()=>addTask(L.team));
+      lg.appendChild(ad);
+    }
     const lb=document.createElement('div');lb.className='band';lb.style.background=L.fill;
     lh.appendChild(lg);lh.appendChild(lb);lane.appendChild(lh);
 

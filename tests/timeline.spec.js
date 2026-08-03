@@ -860,3 +860,71 @@ test.describe('Delete work items', () => {
     await expect(page.locator('#status')).toContainText('No work items');
   });
 });
+
+// ─── Add work items ──────────────────────────────────────────────────────────
+
+test.describe('Add work items', () => {
+  test('every assignable lane has an add button, inflight does not', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    await expect(page.locator('.ladd')).toHaveCount(3);
+    await expect(page.locator('.ladd[data-team="inflight"]')).toHaveCount(0);
+    await expect(page.locator('.ladd[data-team="exchange"]')).toHaveCount(1);
+  });
+
+  test('adding puts the item in the clicked lane with GA / planned defaults', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    page.once('dialog', d => d.accept('Brand safety controls'));
+    await page.click('.ladd[data-team="auction"]');
+    await expect(page.locator('.bar')).toHaveCount(15);
+    const row = page.locator('.lane[data-team="auction"] .row', { hasText: 'Brand safety controls' });
+    await expect(row).toHaveCount(1);
+    await expect(row.locator('.statbtn')).toHaveText('planned');
+    await expect(row.locator('.mvpbtn')).not.toHaveClass(/\bon\b/);
+  });
+
+  test('the new bar starts at or after the lane last bar end', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    // auction holds only preroll: s=12 dur=2 → new item starts at week 14
+    page.once('dialog', d => d.accept('Follow up work'));
+    await page.click('.ladd[data-team="auction"]');
+    const id = await page.locator('.lane[data-team="auction"] .bar').last().getAttribute('data-id');
+    const left = await page.locator(`.bar[data-id="${id}"]`).evaluate(el => el.style.left);
+    expect(parseFloat(left)).toBeCloseTo(14 * 88, 0);
+  });
+
+  test('dismissing the prompt adds nothing', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    page.once('dialog', d => d.dismiss());
+    await page.click('.ladd[data-team="exchange"]');
+    await page.waitForTimeout(300);
+    await expect(page.locator('.bar')).toHaveCount(14);
+  });
+
+  test('an added item survives a reload', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    page.once('dialog', d => d.accept('Persisted item'));
+    await page.click('.ladd[data-team="exchange"]');
+    await page.click('#save');
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.bar')).toHaveCount(15);
+    await expect(page.locator('.lane[data-team="exchange"] .row', { hasText: 'Persisted item' })).toHaveCount(1);
+  });
+
+  test('two items with the same name get distinct ids', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    page.once('dialog', d => d.accept('Same name'));
+    await page.click('.ladd[data-team="exchange"]');
+    page.once('dialog', d => d.accept('Same name'));
+    await page.click('.ladd[data-team="exchange"]');
+    await expect(page.locator('.bar')).toHaveCount(16);
+    const ids = await page.locator('.bar').evaluateAll(els => els.map(e => e.dataset.id));
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
