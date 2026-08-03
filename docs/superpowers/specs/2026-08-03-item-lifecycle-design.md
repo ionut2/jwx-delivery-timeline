@@ -288,4 +288,26 @@ The page footnote (`:135`) is reworded to drop its two critical-path sentences �
 | `tests/timeline.spec.js` | two edits plus the new describes above |
 | `docs/superpowers/specs/2026-08-03-item-lifecycle-design.md` | this spec |
 
-No dependency, tooling or CI changes. `.github/workflows/deploy.yml` is unaffected: it substitutes credentials by string match on the two placeholder constants, which are untouched.
+No dependency or tooling changes. One CI change was added late: `.github/workflows/deploy.yml` now also removes `docs/` before publishing, because this branch would otherwise have served ~1500 lines of internal spec and plan from the public Pages site. The credential substitution step is untouched, and the two placeholder constants remain byte-identical.
+
+---
+
+## Known issues and follow-ups
+
+Raised by the final whole-branch review, deliberately not fixed in this branch. Recorded here rather than lost, roughly in order of how much they matter.
+
+**The JSONBin master key is embedded in a public page.** Pre-existing, but this change altered its blast radius. Under the old overlay model a hostile or corrupt write could only reposition bars, because the read path overlaid `s`/`dur`/`team` onto BASELINE. Now the payload is authoritative, so a single write can replace or empty the plan for every viewer, with no undo and no history. The magnitude clamp and `sanitizeTeams` bound how *malformed* a payload can be, not how *wrong* it can be. Fine for an internal timeline, but it should be a conscious decision rather than a side effect of the refactor.
+
+**`loadTeams()` is not gated.** `sanitizeTeams()` covers the cloud and import paths; the localStorage path still feeds `fill`/`ink` into inline styles unchecked. Only reachable by hand-editing your own storage — `saveTeams()` writes already-sanitized lanes — so it is self-inflicted rather than remote, but it is the same class of defect and the inconsistency is worth closing.
+
+**Unset deploy secrets fail quietly in the worst direction.** GitHub substitutes missing secrets as empty strings, so `'YOUR_BIN_ID_HERE'` becomes `''`, `cloudEnabled()` returns **true**, and every visitor gets a permanent `⚠ Cloud unavailable` instead of clean local-only mode. A guard in the workflow that exits non-zero on an empty secret would fail loudly instead.
+
+**MVP and GA milestone lines collide when the overall-latest item is MVP-scope.** Both lines and both labels land on the same x, and the GA label paints over the MVP one. Newly reachable, because scope was not editable before. Cosmetic; `drawMilestones()` could nudge the second label when the x values match.
+
+**Deleting the last item, or importing a v2 payload with `tasks: []`, gives no guidance.** The `No work items — add one from a lane, or Reset to baseline` copy lives only in `init()`, so it appears on reload but not at the moment the timeline becomes empty. The v2-empty import path also has no test; the only empty-import test uses a v1-shaped payload and asserts failure.
+
+**Deleting an item no longer names it in the status line when cloud sync is off.** A consequence of ordering `setStatus` before `save()` so the `● Unsaved changes` indicator wins in the cloud-on case, which is production. The name is still in the `confirm()` dialog the user just accepted.
+
+**At the 520-week clamp ceiling, bars can draw past the last gridline.** A direct consequence of `nWeeks()`'s 600-week backstop being lower than 520 + a long duration. Only reachable from a payload that was already clamped, i.e. already corrupt.
+
+**Minor test-suite notes.** The drag tests use synthetic `page.mouse` events against `pointerdown` handlers — the flakier style, though stable across every run here. The `dismissing the confirm` and `dismissing the prompt` negative assertions use fixed 300ms waits, matching the pre-existing house style, because there is no event to await for "nothing happened".
