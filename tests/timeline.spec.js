@@ -687,3 +687,47 @@ test.describe('Status treatments', () => {
     await expect(legend.locator('.sw-indev')).toHaveCount(1);
   });
 });
+
+// ─── MVP scope toggle ────────────────────────────────────────────────────────
+
+test.describe('MVP scope toggle', () => {
+  test('every item row has an MVP toggle reflecting its scope', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    await expect(page.locator('.mvpbtn')).toHaveCount(14);
+    await expect(page.locator('.mvpbtn[data-id="viewability"]')).toHaveClass(/\bon\b/);
+    await expect(page.locator('.mvpbtn[data-id="gam"]')).not.toHaveClass(/\bon\b/);
+  });
+
+  test('toggling scope repaints the bar', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    await page.click('.mvpbtn[data-id="gam"]');
+    await expect(page.locator('.bar[data-id="gam"] > .bar-fill'))
+      .toHaveCSS('background-color', 'rgb(91, 81, 198)');
+    await expect(page.locator('.mvpbtn[data-id="gam"]')).toHaveClass(/\bon\b/);
+  });
+
+  test('deselecting the latest MVP item pulls the MVP date earlier', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    // BASELINE MVP ends: playback 9.5+3.5 = 13 is the latest
+    const before = await page.locator('#m-mvp').textContent();
+    await page.click('.mvpbtn[data-id="playback"]');
+    const after = await page.locator('#m-mvp').textContent();
+    expect(after).not.toBe(before);
+    // toggling back restores it
+    await page.click('.mvpbtn[data-id="playback"]');
+    await expect(page.locator('#m-mvp')).toHaveText(before);
+  });
+
+  test('scope survives a reload', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    await page.click('.mvpbtn[data-id="gam"]');
+    await page.click('#save');
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.mvpbtn[data-id="gam"]')).toHaveClass(/\bon\b/);
+  });
+});
