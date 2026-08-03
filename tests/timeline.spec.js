@@ -969,22 +969,9 @@ test.describe('Add work items', () => {
 // ─── Row gutter layout ────────────────────────────────────────────────────────
 
 test.describe('Row gutter layout', () => {
-  test('the five row controls fit inside the fixed-width gutter, even with a long item name and long team name', async ({ page }) => {
+  test('the five row controls fit inside the fixed-width gutter on every row', async ({ page }) => {
     await page.goto('/');
     await waitForBars(page);
-
-    // Give the dropdown a long selected-option label too: add a custom team with
-    // a deliberately long name and reassign the longest-named baseline item to
-    // it via the in-row .tsel dropdown -- the worst case for horizontal space.
-    page.once('dialog', d => d.accept('International Ad Operations & Compliance'));
-    await page.click('#addteam');
-    await page.waitForFunction(() =>
-      Array.from(document.querySelectorAll('.lhead')).some(el => el.textContent.includes('International Ad Operations & Compliance')),
-      { timeout: 5_000 }
-    );
-    const row = page.locator('.row', { hasText: 'Ad server segmentation (multi-property)' });
-    await row.locator('.tsel').selectOption({ label: 'International Ad Operations & Compliance' });
-    await expect(row.locator('.tsel')).toHaveValue(/^t-/);
 
     // Each row's five controls ([team ▾] [MVP] [status] [size] [✕]) live in one
     // .ctl. .ctl has no explicit width, and align-items:flex-end on its .gut
@@ -997,6 +984,13 @@ test.describe('Row gutter layout', () => {
     // offsetWidth regardless of whether it overflowed the gutter. Only a direct
     // content-vs-available-space measurement against the .gut ancestor catches
     // this; a same-offsetTop / no-wrap check would pass even while clipped.
+    //
+    // There is no user-triggerable "worst case" row to construct: the .tsel
+    // dropdown is CSS-capped at max-width:78px regardless of team-name length,
+    // and the item name only ever reaches the sibling .nm span (which wraps),
+    // never .ctl. Every .ctl's width is driven entirely by fixed strings (MVP,
+    // planned/in dev/done, a size code, ✕), so checking every row on the
+    // unmodified baseline page is the strongest available test.
     const rows = await page.locator('.row .gut .ctl').evaluateAll(ctls => ctls.map(ctl => {
       const gut = ctl.closest('.gut');
       const cs = getComputedStyle(gut);
