@@ -175,7 +175,10 @@ function positionBar(bar,t){
   bar.style.left=(t.s*WEEKW)+'px';bar.style.width=Math.max(18,t.dur*WEEKW)+'px';
   const fill=bar.querySelector('.bar-fill');
   fill.className='bar-fill'+(t.status==='done'?' done':t.status==='in-dev'?' indev':'');
-  fill.style.background=SCOPE[t.scope].bg;
+  // backgroundColor, NOT the `background` shorthand: the shorthand writes an inline
+  // background-image:none that outranks the stylesheet, which would silently kill
+  // the done hatch that Task 3 applies via `background-image:var(--hatch)`.
+  fill.style.backgroundColor=SCOPE[t.scope].bg;
   bar.querySelector('.bar-label').textContent=barLabel(t);
   bar.title=t.name+'\n'+(t.size!=='—'?'Size '+t.size+' · ':'')+durLabel(t)+'\n'+fmt(startDate(t))+' → '+fmt(endDate(t));
 }
