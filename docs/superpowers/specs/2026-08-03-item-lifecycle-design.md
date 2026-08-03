@@ -155,7 +155,7 @@ The existing `.ctl` row (`:351`) gains three controls, reusing the red-✕ `.lrm
 
 - **`[MVP]` pill** — filled `#5B51C6` with white text when `scope==='MVP'`; muted outline when `'GA'`. Click toggles `scope`.
 - **Status pill** — labelled with the current state and cycling on click: `planned → in dev → done → planned`. Self-describing, one click, and makes all three statuses reachable, which a plain checkbox cannot (it would leave `in-dev` settable only from `BASELINE`, and unchecking `jwdata` would strand it at `planned`).
-- **`✕`** — calls `confirm('Delete "<name>"? This cannot be undone.')`. There is no undo; Export serves as the backup path, and Reset restores the baked plan.
+- **`✕`** — class `.irm`, calls `confirm('Delete "<name>"? This cannot be undone.')`. There is no undo; Export serves as the backup path, and Reset restores the baked plan. It must **not** reuse the `.lrm` class: `tests/timeline.spec.js:365` locates the team-remove button by that class and would match item buttons too.
 
 Measured fit: `select` 78 + MVP 40 + status 52 + size badge 26 + ✕ 20 + gaps 32 ≈ 248px within the 286px usable gutter (310px less 24px padding). No gutter widening needed.
 
@@ -165,7 +165,9 @@ Every mutation calls `render()` then `save()`, matching the team `<select>` hand
 
 ### Adding items
 
-A small ghost `+ item` button at the left edge of each lane's `.band` (`:338`), so it sits in the lane tint immediately right of the sticky gutter and is reachable without horizontal scrolling.
+A small ghost `+ item` button in each lane header's **gutter** (`:335`), beside the lane label and following the precedent of the `.lrm` team-remove button already there.
+
+> Revised during planning. The button was first specified for the left edge of the lane's `.band` (`:338`). That does not work: `.band` scrolls horizontally, and a `position:sticky` button inside it slides underneath the sticky 310px gutter, which sits at `z-index:6`. The header gutter is itself sticky, so a button placed there is always visible with no positioning tricks. Lane labels already ellipsize (`:90`), so the reduced label width is absorbed by existing behaviour.
 
 Excluded from the `inflight` lane, matching the existing team-dropdown exclusion at `:354` — that lane represents pre-Jun-15 work and is not an assignment target.
 
