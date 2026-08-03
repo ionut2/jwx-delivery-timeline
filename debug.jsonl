@@ -1,5 +1,0 @@
-{"ts":"2026-06-24T09:23:31.739Z","kind":"load"}
-{"ts":"2026-06-24T09:42:24.339Z","kind":"load"}
-{"ts":"2026-06-24T09:42:24.370Z","kind":"console","level":"error","message":"Unrecognized Content-Security-Policy directive 'webrtc'.","source":"cowork-artifact://local/jwx-delivery-timeline/index.html:0","url":"cowork-artifact://local/jwx-delivery-timeline/index.html"}
-{"ts":"2026-07-01T07:11:16.785Z","kind":"load","url":"cowork-artifact://local/jwx-delivery-timeline/index.html"}
-{"ts":"2026-07-01T07:12:20.096Z","kind":"load","url":"cowork-artifact://local/jwx-delivery-timeline/index.html"}
