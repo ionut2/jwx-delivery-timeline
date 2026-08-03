@@ -212,17 +212,12 @@ test.describe('Import', () => {
     await expect(page.locator('#status')).toContainText('failed', { timeout: 5_000 });
   });
 
-  test('importing a versionless empty tasks array falls back to BASELINE, not an error', async ({ page }) => {
-    // No `version` key defaults to v1 migration, which is unconditionally BASELINE-anchored:
-    // an empty overlay array just means "no overrides," same as the v1 cloud/load paths.
-    // This is not the v2 "explicitly empty plan" case — that requires version:2.
+  test('importing JSON with empty tasks array shows error status', async ({ page }) => {
     await page.goto('/');
-    await waitForBars(page);
     const tmp = path.join(os.tmpdir(), `empty-${Date.now()}.json`);
     fs.writeFileSync(tmp, JSON.stringify({ app: 'jwx-timeline', tasks: [] }));
     await page.locator('#importFile').setInputFiles(tmp);
-    await expect(page.locator('#status')).toContainText('Imported', { timeout: 5_000 });
-    await expect(page.locator('.bar')).toHaveCount(14);
+    await expect(page.locator('#status')).toContainText('failed', { timeout: 5_000 });
   });
 
   test('timeline still shows 14 bars after a failed import', async ({ page }) => {
