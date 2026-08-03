@@ -637,3 +637,53 @@ test.describe('Scope & status model', () => {
     await expect(page.locator('.bar.violation')).toHaveCount(0);
   });
 });
+
+// ─── Status treatments ───────────────────────────────────────────────────────
+
+test.describe('Status treatments', () => {
+  test('a done bar keeps full scope colour and gains a hatch', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(v2 => localStorage.setItem('jwx_timeline_state_final', v2), V2([
+      { id: 'viewability', name: 'Ad viewability policy setup', team: 'pubmon', s: 3, dur: 6.5, size: 'XL', scope: 'MVP', status: 'done' },
+    ]));
+    await page.reload();
+    await waitForBars(page);
+    const fill = page.locator('.bar[data-id="viewability"] > .bar-fill');
+    // scope colour is NOT degraded by being done
+    expect(await fill.evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgb(91, 81, 198)');
+    expect(await fill.evaluate(el => getComputedStyle(el).backgroundImage)).toContain('repeating-linear-gradient');
+  });
+
+  test('a done bar label is prefixed with a check', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(v2 => localStorage.setItem('jwx_timeline_state_final', v2), V2([
+      { id: 'viewability', name: 'Ad viewability policy setup', team: 'pubmon', s: 3, dur: 6.5, size: 'XL', scope: 'MVP', status: 'done' },
+    ]));
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.bar[data-id="viewability"] > .bar-label')).toContainText('✓');
+  });
+
+  test('an in-dev bar is masked but its handle is not', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const fillMask = await page.locator('.bar[data-id="jwdata"] > .bar-fill')
+      .evaluate(el => getComputedStyle(el).maskImage || getComputedStyle(el).webkitMaskImage);
+    expect(fillMask).toContain('linear-gradient');
+    const handleMask = await page.locator('.bar[data-id="jwdata"] > .handle')
+      .evaluate(el => getComputedStyle(el).maskImage || getComputedStyle(el).webkitMaskImage);
+    expect(handleMask === 'none' || !handleMask).toBeTruthy();
+  });
+
+  test('legend documents both scopes and both progress states', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const legend = page.locator('.legend');
+    await expect(legend).toContainText('MVP scope');
+    await expect(legend).toContainText('GA scope');
+    await expect(legend).toContainText('Done');
+    await expect(legend).toContainText('In development');
+    await expect(legend.locator('.sw-done')).toHaveCount(1);
+    await expect(legend.locator('.sw-indev')).toHaveCount(1);
+  });
+});

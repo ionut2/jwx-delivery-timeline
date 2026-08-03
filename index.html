@@ -22,6 +22,7 @@
     --ink:#2C2C2A; --mut:#5F5E5A; --faint:#888780;
     --line:#E5E3DB; --bg:#FFFFFF; --panel:#FAFAF7;
     --gutter:310px; --weekw:88px; --rowh:60px;
+    --hatch:repeating-linear-gradient(135deg,rgba(255,255,255,.42) 0,rgba(255,255,255,.42) 3px,transparent 3px,transparent 8px);
   }
   *{box-sizing:border-box;}
   body{margin:0;background:#F1EFE8;color:var(--ink);font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif;}
@@ -76,6 +77,11 @@
   .bar-fill{position:absolute;left:0;top:0;right:0;bottom:0;border-radius:5px;
     box-shadow:0 1px 2px rgba(0,0,0,.12);}
   .bar-label{position:relative;z-index:1;pointer-events:none;overflow:hidden;text-overflow:ellipsis;}
+  .bar-fill.done{background-image:var(--hatch);}
+  .bar-fill.indev{-webkit-mask-image:linear-gradient(to right,#000 0,#000 68%,transparent 100%);
+    mask-image:linear-gradient(to right,#000 0,#000 68%,transparent 100%);}
+  .sw-done{background:var(--mvp);background-image:var(--hatch);}
+  .sw-indev{background:linear-gradient(to right,var(--mvp) 60%,rgba(91,81,198,.15));}
   .bar:active{cursor:grabbing;}
   .bar .handle{position:absolute;right:0;top:0;width:11px;height:100%;cursor:ew-resize;
     border-radius:0 5px 5px 0;background:rgba(255,255,255,.28);z-index:2;}
@@ -121,10 +127,10 @@
   <div class="frame"><div class="scroll"><div class="inner" id="inner"></div></div></div>
 
   <div class="legend">
-    <div class="it"><span class="sw" style="background:var(--mvp)"></span>MVP (ships first)</div>
-    <div class="it"><span class="sw" style="background:var(--ga)"></span>General availability</div>
-    <div class="it"><span class="sw" style="background:var(--dev)"></span>In development</div>
-    <div class="it"><span class="sw" style="background:var(--done)"></span>Done</div>
+    <div class="it"><span class="sw" style="background:var(--mvp)"></span>MVP scope</div>
+    <div class="it"><span class="sw" style="background:var(--ga)"></span>GA scope</div>
+    <div class="it"><span class="sw sw-done"></span>Done</div>
+    <div class="it"><span class="sw sw-indev"></span>In development</div>
     <div class="it"><span class="sw" style="background:var(--mvp-d)"></span>MVP milestone</div>
     <div class="it"><span class="sw" style="background:var(--ga-d)"></span>GA milestone</div>
     <div class="it">S=1–2 bd · M≈1w · L≈2w · XL≈4w (range 2–6)</div>
@@ -423,14 +429,14 @@ function buildBar(t){
   positionBar(bar,t);
   return bar;
 }
-function barLabel(t){const dl=t.dur*WEEKW;
-  const txt=t.size!=='—'?(t.size+' · '+durLabel(t)):durLabel(t);
-  return dl<70?(t.size!=='—'?t.size:'•'):txt;}
+function barLabel(t){const dl=t.dur*WEEKW;const tick=t.status==='done'?'✓ ':'';
+  const txt=tick+(t.size!=='—'?(t.size+' · '+durLabel(t)):durLabel(t));
+  return dl<70?(tick.trim()+(t.size!=='—'?t.size:'•')):txt;}
 function positionBar(bar,t){
   bar.style.left=(t.s*WEEKW)+'px';bar.style.width=Math.max(18,t.dur*WEEKW)+'px';
   const fill=bar.querySelector('.bar-fill');
   fill.className='bar-fill'+(t.status==='done'?' done':t.status==='in-dev'?' indev':'');
-  fill.style.background=SCOPE[t.scope].bg;
+  fill.style.backgroundColor=SCOPE[t.scope].bg;
   bar.querySelector('.bar-label').textContent=barLabel(t);
   bar.title=t.name+'\n'+(t.size!=='—'?'Size '+t.size+' · ':'')+durLabel(t)+'\n'+fmt(startDate(t))+' → '+fmt(endDate(t));
 }
