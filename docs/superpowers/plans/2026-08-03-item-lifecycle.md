@@ -52,6 +52,7 @@ Converts the model and every reader of `type`, splits the bar into layers so a l
   - `BASELINE` items shaped `{id, name, team, s, dur, size, scope, status}`
   - DOM: `.bar > .bar-fill`, `.bar > .bar-label`, `.bar > .handle` as siblings; `.bar-fill` carries `done` / `indev` classes
   - `barLabel(t)`, `positionBar(bar, t)`, `buildBar(t)` — same signatures as before
+  - `milestoneEnds()` → `{mvp, ga}` — the only place the MVP-membership predicate lives
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -205,9 +206,14 @@ In `render()`, replace lines 352-364 (from `if(!LOCKED.has(t.id)){` through `ctl
 Replace lines 420-444 (`function drawMilestones` through the end of `updateMetrics`) with:
 
 ```js
+// Single home for the MVP-membership rule: Tasks 4 and 5 both assert on it, and
+// drawMilestones/updateMetrics must never disagree about where the lines fall.
+function milestoneEnds(){return {
+  mvp:Math.max(...tasks.filter(t=>t.scope==='MVP').map(t=>t.s+t.dur),0),
+  ga:Math.max(...tasks.map(t=>t.s+t.dur),0)};}
+
 function drawMilestones(wrap,nw){
-  const mvpEnd=Math.max(...tasks.filter(t=>t.scope==='MVP').map(t=>t.s+t.dur),0);
-  const gaEnd=Math.max(...tasks.map(t=>t.s+t.dur),0);
+  const {mvp:mvpEnd,ga:gaEnd}=milestoneEnds();
   [{w:mvpEnd,c:'#3C3489',lab:'MVP'},{w:gaEnd,c:'#0F6E56',lab:'GA'}].forEach(m=>{
     if(m.w<=0)return;const x=GUT+m.w*WEEKW;
     const ln=document.createElement('div');ln.className='mline';ln.style.left=x+'px';ln.style.borderColor=m.c;wrap.appendChild(ln);
@@ -216,15 +222,14 @@ function drawMilestones(wrap,nw){
 }
 
 function updateMetrics(){
-  const mvpEnd=Math.max(...tasks.filter(t=>t.scope==='MVP').map(t=>t.s+t.dur),0);
-  const gaEnd=Math.max(...tasks.map(t=>t.s+t.dur),0);
+  const {mvp:mvpEnd,ga:gaEnd}=milestoneEnds();
   document.getElementById('m-mvp').textContent=mvpEnd>0?fmt(bizDate(mvpEnd*5)):'—';
   document.getElementById('m-ga').textContent=gaEnd>0?fmt(bizDate(gaEnd*5)):'—';
   document.getElementById('m-span').textContent=gaEnd.toFixed(1).replace(/\.0$/,'')+' weeks';
 }
 ```
 
-Note `status` is deliberately absent from both — marking an item done must not move a milestone.
+Note `status` is deliberately absent from `milestoneEnds()` — marking an item done must not move a milestone.
 
 - [ ] **Step 7: Update the CSS**
 
@@ -630,13 +635,19 @@ Expected: 4 failures — no `background-image` on the fill, no `✓` in the labe
 
 - [ ] **Step 3: Add the treatment CSS**
 
-Immediately after the `.bar-label` rule added in Task 1:
+First add the hatch to the `:root` block (after the `--gutter/--weekw/--rowh` line), so the bars and the legend key that documents them cannot drift apart. The file already keeps every colour in `:root`, so this follows the established convention:
 
 ```css
-  .bar-fill.done{background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.42) 0,rgba(255,255,255,.42) 3px,transparent 3px,transparent 8px);}
+    --hatch:repeating-linear-gradient(135deg,rgba(255,255,255,.42) 0,rgba(255,255,255,.42) 3px,transparent 3px,transparent 8px);
+```
+
+Then, immediately after the `.bar-label` rule added in Task 1:
+
+```css
+  .bar-fill.done{background-image:var(--hatch);}
   .bar-fill.indev{-webkit-mask-image:linear-gradient(to right,#000 0,#000 68%,transparent 100%);
     mask-image:linear-gradient(to right,#000 0,#000 68%,transparent 100%);}
-  .sw-done{background:var(--mvp);background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.42) 0,rgba(255,255,255,.42) 3px,transparent 3px,transparent 8px);}
+  .sw-done{background:var(--mvp);background-image:var(--hatch);}
   .sw-indev{background:linear-gradient(to right,var(--mvp) 60%,rgba(91,81,198,.15));}
 ```
 
