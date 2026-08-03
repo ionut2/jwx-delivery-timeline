@@ -39,13 +39,13 @@ async function waitForBars(page) {
  *   PUT  /v3/b/:id        → { record: <request body>, metadata: { id: 'test' } }
  *   fail = true           → abort the connection
  */
-async function mockCloud(page, { data = null, fail = false } = {}) {
+async function mockCloud(page, { data = null, fail = false, version = 1 } = {}) {
   await page.route('**/api.jsonbin.io/**', async route => {
     if (fail) { await route.abort('failed'); return; }
 
     if (route.request().method() === 'GET') {
       const record = data
-        ? { app: 'jwx-timeline', version: 1, exportedAt: new Date().toISOString(), teams: [], tasks: data }
+        ? { app: 'jwx-timeline', version, exportedAt: new Date().toISOString(), teams: [], tasks: data }
         : {};
       await route.fulfill({
         status: 200,
@@ -139,7 +139,7 @@ test.describe('Export', () => {
     await dl.saveAs(tmp);
     const data = JSON.parse(fs.readFileSync(tmp, 'utf8'));
     expect(data.app).toBe('jwx-timeline');
-    expect(data.version).toBe(1);
+    expect(data.version).toBe(2);
     expect(data.exportedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(Array.isArray(data.tasks)).toBe(true);
     expect(data.tasks).toHaveLength(14);
@@ -220,6 +220,37 @@ test.describe('Import', () => {
     await expect(page.locator('#status')).toContainText('failed', { timeout: 5_000 });
   });
 
+  test('an item whose id contains quote and bracket characters can still be dragged', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', err => errors.push(err.message));
+    await page.goto('/');
+    await waitForBars(page);
+
+    // addTask() slugifies, but import and cloud do not: an id like a"b]c used to be
+    // interpolated into a querySelector, which threw and silently killed the drag.
+    const tmp = path.join(os.tmpdir(), `hostile-id-${Date.now()}.json`);
+    fs.writeFileSync(tmp, JSON.stringify({
+      app: 'jwx-timeline', version: 2, teams: [],
+      tasks: [{ id: 'a"b]c', name: 'Hostile id', team: 'pubmon', s: 2, dur: 2, size: 'M', scope: 'GA', status: 'planned' }],
+    }));
+    await page.locator('#importFile').setInputFiles(tmp);
+    await expect(page.locator('#status')).toContainText('Imported', { timeout: 5_000 });
+    await expect(page.locator('.bar')).toHaveCount(1);
+    expect(await page.locator('.bar').getAttribute('data-id')).toBe('a"b]c');
+
+    const bar = page.locator('.bar');
+    const before = parseFloat(await bar.evaluate(el => el.style.left));
+    const box = await bar.boundingBox();
+    await page.mouse.move(box.x + 20, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 20 + 88, box.y + box.height / 2, { steps: 8 });
+    await page.mouse.up();
+
+    const after = parseFloat(await page.locator('.bar').evaluate(el => el.style.left));
+    expect(after).toBeCloseTo(before + 88, 0);
+    expect(errors, `unexpected JS errors: ${errors.join('; ')}`).toHaveLength(0);
+  });
+
   test('timeline still shows 14 bars after a failed import', async ({ page }) => {
     await page.goto('/');
     await waitForBars(page);
@@ -252,15 +283,217 @@ test.describe('Save & Persistence', () => {
     await expect(page.locator('#status')).toContainText('Restored');
   });
 
-  test('save writes tasks to localStorage', async ({ page }) => {
+  test('save writes a v2 envelope to localStorage', async ({ page }) => {
     await page.goto('/');
     await waitForBars(page);
     await page.click('#save');
     const stored = await page.evaluate(() => localStorage.getItem('jwx_timeline_state_final'));
     expect(stored).not.toBeNull();
     const parsed = JSON.parse(stored);
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed).toHaveLength(14);
+    expect(parsed.version).toBe(2);
+    expect(Array.isArray(parsed.tasks)).toBe(true);
+    expect(parsed.tasks).toHaveLength(14);
+  });
+});
+
+// ─── Persistence v2 ──────────────────────────────────────────────────────────
+
+const V2 = (tasks) => JSON.stringify({
+  app: 'jwx-timeline', version: 2, exportedAt: '2026-08-03T00:00:00.000Z', teams: [], tasks,
+});
+
+test.describe('Persistence v2', () => {
+  test('a v1 bare array migrates with positions preserved', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(() => localStorage.setItem('jwx_timeline_state_final',
+      JSON.stringify([{ id: 'viewability', s: 7, dur: 6.5, team: 'auction' }])));
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.bar')).toHaveCount(14);
+    const left = await page.locator('.bar[data-id="viewability"]').evaluate(el => el.style.left);
+    expect(parseFloat(left)).toBeCloseTo(7 * 88, 0);
+    // scope/status come from BASELINE, which v1 never persisted
+    await expect(page.locator('.bar[data-id="jwdata"] > .bar-fill.indev')).toHaveCount(1);
+  });
+
+  test('a v2 payload is loaded verbatim, including a deleted item', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(v2 => localStorage.setItem('jwx_timeline_state_final', v2), V2([
+      { id: 'viewability', name: 'Ad viewability policy setup', team: 'pubmon', s: 3, dur: 6.5, size: 'XL', scope: 'MVP', status: 'done' },
+      { id: 'gam', name: 'GAM mediation Spotlight (pre-roll)', team: 'exchange', s: 1, dur: 5.5, size: 'L', scope: 'GA', status: 'planned' },
+    ]));
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.bar')).toHaveCount(2);
+    await expect(page.locator('.bar[data-id="playback"]')).toHaveCount(0);
+  });
+
+  test('an explicitly empty v2 plan stays empty across reload', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(v2 => localStorage.setItem('jwx_timeline_state_final', v2), V2([]));
+    await page.reload();
+    await waitForInit(page);
+    await expect(page.locator('.bar')).toHaveCount(0);
+    await expect(page.locator('#status')).toContainText('No work items');
+    await expect(page.locator('#m-mvp')).toHaveText('—');
+  });
+
+  test('a corrupt payload falls back to BASELINE', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(() => localStorage.setItem('jwx_timeline_state_final',
+      JSON.stringify({ app: 'jwx-timeline', version: 2, tasks: 'not-an-array' })));
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.bar')).toHaveCount(14);
+  });
+
+  test('a v2 payload whose every item is invalid falls back to BASELINE', async ({ page }) => {
+    await page.goto('/');
+    // items with no usable id sanitize away — that is corruption, not an empty plan
+    await page.evaluate(v2 => localStorage.setItem('jwx_timeline_state_final', v2),
+      V2([{ name: 'no id' }, { id: '', name: 'blank id' }]));
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.bar')).toHaveCount(14);
+  });
+
+  test('sanitizeTasks coerces out-of-range and unknown values', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const out = await page.evaluate(() => window.sanitizeTasks([
+      { id: 'a', scope: 'nonsense', status: 'wat', dur: -5, s: -3, size: 'XXL' },
+      { id: 'b', name: 'ok', team: 'exchange', s: 2, dur: 1.5, size: 'M', scope: 'MVP', status: 'done' },
+      { id: 'a', name: 'duplicate id' },
+      { name: 'no id at all' },
+    ]));
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({ id: 'a', name: 'Untitled item', team: 'pubmon', s: 0, dur: 1, size: '—', scope: 'GA', status: 'planned' });
+    expect(out[1]).toMatchObject({ id: 'b', scope: 'MVP', status: 'done', dur: 1.5 });
+  });
+
+  test('sanitizeTasks clamps absurd s and dur magnitudes', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const out = await page.evaluate(() => window.sanitizeTasks([
+      { id: 'boom', name: 'Corrupt', team: 'pubmon', s: 40000, dur: 99999, size: 'M', scope: 'GA', status: 'planned' },
+      { id: 'edge', name: 'Non-finite s', team: 'pubmon', s: Infinity, dur: 1e308, size: 'M', scope: 'GA', status: 'planned' },
+    ]));
+    expect(out).toHaveLength(2);
+    // 520 weeks is ~10 years: far past any real plan, far short of a render hang
+    expect(out[0].s).toBe(520);
+    expect(out[0].dur).toBe(520);
+    // Infinity is not finite so it falls back; 1e308 is finite and clamps
+    expect(out[1].s).toBe(0);
+    expect(out[1].dur).toBe(520);
+  });
+
+  test('a v2 payload with an absurd s renders a usable, recoverable page', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(v2 => localStorage.setItem('jwx_timeline_state_final', v2), V2([
+      { id: 'boom', name: 'Corrupt item', team: 'pubmon', s: 40000, dur: 1, size: 'M', scope: 'GA', status: 'planned' },
+    ]));
+    await page.reload();
+    await waitForBars(page);
+    // The clamp is observable, not merely survivable: s=40000 would size the grid to
+    // ~40002 weeks and render ~560k .gridcol divs, hanging the page inside render().
+    const left = await page.locator('.bar[data-id="boom"]').evaluate(el => el.style.left);
+    expect(parseFloat(left)).toBeCloseTo(520 * 88, 0);
+    expect(await page.evaluate(() => nWeeks())).toBe(523);
+    // and the toolbar still works, so the user can recover without devtools
+    await page.click('#reset');
+    await waitForBars(page);
+    await expect(page.locator('.bar')).toHaveCount(14);
+    await expect(page.locator('#status')).toContainText('baseline');
+  });
+
+  test('a v1 payload with an absurd s is clamped on migration', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(() => localStorage.setItem('jwx_timeline_state_final',
+      JSON.stringify([{ id: 'viewability', s: 40000, dur: 99999, team: 'pubmon' }])));
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.bar')).toHaveCount(14);
+    const left = await page.locator('.bar[data-id="viewability"]').evaluate(el => el.style.left);
+    expect(parseFloat(left)).toBeCloseTo(520 * 88, 0);
+    // s and dur both clamp to 520, so nWeeks() hits its own 600-week ceiling
+    expect(await page.evaluate(() => nWeeks())).toBe(600);
+  });
+
+  test('nWeeks stays bounded for tasks that never went through a validator', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const nw = await page.evaluate(() => {
+      tasks.push({ id: 'bypass', name: 'Direct write', team: 'pubmon', s: 5000, dur: 5000, size: 'M', scope: 'GA', status: 'planned' });
+      return nWeeks();
+    });
+    expect(nw).toBe(600);
+  });
+
+  test('a v2 cloud payload is loaded verbatim', async ({ page }) => {
+    await mockCloud(page, {
+      version: 2,
+      data: [{ id: 'solo', name: 'Only item', team: 'auction', s: 4, dur: 2, size: 'M', scope: 'MVP', status: 'done' }],
+    });
+    await page.goto('/test-index.html');
+    await expect(page.locator('#status')).toContainText('Synced from cloud', { timeout: 10_000 });
+    await expect(page.locator('.bar')).toHaveCount(1);
+    await expect(page.locator('.bar[data-id="solo"] > .bar-fill.done')).toHaveCount(1);
+  });
+});
+
+// ─── Team payload validation ─────────────────────────────────────────────────
+
+test.describe('Team payload validation', () => {
+  test('an imported team colour that is not a hex value never reaches the DOM', async ({ page }) => {
+    const external = [];
+    page.on('request', r => { if (r.url().includes('example.com')) external.push(r.url()); });
+
+    await page.goto('/');
+    await waitForBars(page);
+
+    // teams became authoritative at v2 alongside tasks; fill/ink go straight into
+    // inline style, so an unvalidated url(...) made the page fetch from a third party.
+    const tmp = path.join(os.tmpdir(), `evil-team-${Date.now()}.json`);
+    fs.writeFileSync(tmp, JSON.stringify({
+      app: 'jwx-timeline', version: 2,
+      teams: [{
+        team: 't-evil', short: 'Evil', label: 'Team Evil',
+        fill: 'url(https://example.com/track.png)',
+        ink: 'url(https://example.com/ink.png)',
+      }],
+      tasks: [{ id: 'solo', name: 'Only item', team: 't-evil', s: 1, dur: 2, size: 'M', scope: 'GA', status: 'planned' }],
+    }));
+    await page.locator('#importFile').setInputFiles(tmp);
+    await expect(page.locator('#status')).toContainText('Imported', { timeout: 5_000 });
+
+    // The lane still renders, with the neutral fallback pair ensureLanes() uses
+    const gut = page.locator('.lane[data-team="t-evil"] .lhead .gut');
+    await expect(gut).toHaveCount(1);
+    await expect(gut).toHaveCSS('background-image', 'none');
+    await expect(gut).toHaveCSS('background-color', 'rgb(241, 239, 232)');  // #F1EFE8
+    await expect(gut).toHaveCSS('color', 'rgb(68, 68, 65)');                // #444441
+    await expect(page.locator('.lane[data-team="t-evil"] .lhead .band')).toHaveCSS('background-image', 'none');
+    await expect(page.locator('.lane[data-team="t-evil"] .bar')).toHaveCount(1);
+
+    await page.waitForTimeout(300);
+    expect(external, `page made outbound requests: ${external.join(', ')}`).toHaveLength(0);
+  });
+
+  test('sanitizeTeams drops unusable entries and non-hex colours', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const out = await page.evaluate(() => window.sanitizeTeams([
+      null,
+      { short: 'no team id' },
+      { team: '' },
+      { team: 't-ok', short: 'OK', label: 'Team OK', fill: '#ABCDEF', ink: '#123' },
+      { team: 't-bad', fill: 'url(https://example.com/x.png)', ink: 'red' },
+      { team: 't-types', short: 42, label: {}, fill: 12345, ink: null },
+    ]));
+    expect(out).toHaveLength(3);
+    expect(out[0]).toEqual({ team: 't-ok', short: 'OK', label: 'Team OK', fill: '#ABCDEF', ink: '#123', custom: true });
+    expect(out[1]).toEqual({ team: 't-bad', short: 't-bad', label: 'Team t-bad', fill: '#F1EFE8', ink: '#444441', custom: true });
+    expect(out[2]).toEqual({ team: 't-types', short: 't-types', label: 'Team t-types', fill: '#F1EFE8', ink: '#444441', custom: true });
   });
 });
 
@@ -417,6 +650,69 @@ test.describe('Cloud Sync (mocked API)', () => {
     await expect(page.locator('.bar')).toHaveCount(14);
   });
 
+  test('an empty bin with a saved local plan says the local plan will be published', async ({ page }) => {
+    await mockCloud(page, { data: null });
+    await page.goto('/test-index.html');
+    // branch A — nothing anywhere: the plan on screen really is BASELINE
+    await expect(page.locator('#status')).toContainText('cloud storage is empty', { timeout: 10_000 });
+
+    // branch B — the bin is still empty, but this browser now holds a real plan, so
+    // "Baseline plan" would be a lie: under v2 a local plan can be anything at all.
+    await page.evaluate(v2 => localStorage.setItem('jwx_timeline_state_final', v2), V2([
+      { id: 'solo', name: 'Local only item', team: 'auction', s: 2, dur: 1, size: 'M', scope: 'GA', status: 'planned' },
+    ]));
+    await page.reload();
+    await expect(page.locator('#status')).toContainText('Cloud is empty', { timeout: 10_000 });
+    await expect(page.locator('#status')).toContainText('published on the next save');
+    await expect(page.locator('#status')).not.toContainText('cloud storage is empty');
+    // the local plan is what is actually on screen
+    await expect(page.locator('.bar')).toHaveCount(1);
+    await expect(page.locator('.bar[data-id="solo"]')).toHaveCount(1);
+  });
+
+  test('a v1 cloud read is rewritten as a v2 bin on the first save', async ({ page }) => {
+    // The riskiest production transition: v1 cloud read → migrate → first Save
+    // rewrites the shared bin as v2, one-way, with no rollback.
+    const puts = [];
+    await page.route('**/api.jsonbin.io/**', async route => {
+      if (route.request().method() === 'PUT') {
+        puts.push(await route.request().postDataJSON());
+        await route.fulfill({
+          status: 200, contentType: 'application/json',
+          body: JSON.stringify({ record: {}, metadata: { id: 'test' } }),
+        });
+      } else {
+        await route.fulfill({
+          status: 200, contentType: 'application/json',
+          body: JSON.stringify({ record: {
+            app: 'jwx-timeline', version: 1, exportedAt: '2026-07-01T00:00:00.000Z',
+            teams: [{ team: 't-qa', short: 'QA', label: 'Team QA', fill: '#FAECE7', ink: '#993C1D' }],
+            tasks: [{ id: 'viewability', s: 9, dur: 4.5, team: 't-qa' }],
+          } }),
+        });
+      }
+    });
+
+    await page.goto('/test-index.html');
+    await expect(page.locator('#status')).toContainText('Synced from cloud', { timeout: 10_000 });
+    await expect(page.locator('.bar')).toHaveCount(14);
+    await expect(page.locator('.lane[data-team="t-qa"]')).toHaveCount(1);
+
+    await page.click('#save');
+    await expect(page.locator('#status')).toContainText('Saved to cloud', { timeout: 10_000 });
+
+    expect(puts.length).toBeGreaterThan(0);
+    const p = puts[puts.length - 1];
+    expect(p.version).toBe(2);
+    expect(p.tasks).toHaveLength(14);
+    // the moved item keeps its v1 position and team, and gains scope/status from BASELINE
+    expect(p.tasks.find(t => t.id === 'viewability'))
+      .toMatchObject({ s: 9, dur: 4.5, team: 't-qa', scope: 'MVP', status: 'planned' });
+    // and the custom team survives the rewrite
+    expect(p.teams).toHaveLength(1);
+    expect(p.teams[0]).toMatchObject({ team: 't-qa', short: 'QA', fill: '#FAECE7', ink: '#993C1D' });
+  });
+
   test('overlays cloud task positions onto the BASELINE', async ({ page }) => {
     // Move viewability to week 8 and playback to week 15
     await mockCloud(page, {
@@ -488,5 +784,489 @@ test.describe('Cloud Sync (mocked API)', () => {
     // markDirty() is a global function; calling it should set the status to '● Unsaved changes'
     await page.evaluate(() => window.markDirty());
     await expect(page.locator('#status')).toContainText('Unsaved changes');
+  });
+});
+
+// ─── Data model: scope / status ───────────────────────────────────────────────
+
+test.describe('Scope & status model', () => {
+  test('exported tasks carry scope and status, not type', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const dlPromise = page.waitForEvent('download');
+    await page.click('#export');
+    const dl = await dlPromise;
+    const tmp = path.join(os.tmpdir(), `export-scope-${Date.now()}.json`);
+    await dl.saveAs(tmp);
+    const { tasks } = JSON.parse(fs.readFileSync(tmp, 'utf8'));
+    expect(tasks).toHaveLength(14);
+    for (const t of tasks) {
+      expect(['MVP', 'GA']).toContain(t.scope);
+      expect(['planned', 'in-dev', 'done']).toContain(t.status);
+      expect(t).not.toHaveProperty('type');
+      expect(t).not.toHaveProperty('dep');
+    }
+  });
+
+  test('bar fill and handle are siblings, never nested', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const bar = page.locator('.bar[data-id="viewability"]');
+    await expect(bar.locator('> .bar-fill')).toHaveCount(1);
+    await expect(bar.locator('> .bar-label')).toHaveCount(1);
+    await expect(bar.locator('> .handle')).toHaveCount(1);
+    // A mask on .bar-fill must not be able to hide the resize handle.
+    await expect(bar.locator('.bar-fill .handle')).toHaveCount(0);
+  });
+
+  test('scope drives the fill colour', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const mvp = await page.locator('.bar[data-id="viewability"] > .bar-fill')
+      .evaluate(el => getComputedStyle(el).backgroundColor);
+    const ga = await page.locator('.bar[data-id="gam"] > .bar-fill')
+      .evaluate(el => getComputedStyle(el).backgroundColor);
+    expect(mvp).toBe('rgb(91, 81, 198)');
+    expect(ga).toBe('rgb(29, 158, 117)');
+  });
+
+  test('in-dev status is marked on the fill', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    await expect(page.locator('.bar[data-id="jwdata"] > .bar-fill.indev')).toHaveCount(1);
+    await expect(page.locator('.bar[data-id="viewability"] > .bar-fill.indev')).toHaveCount(0);
+  });
+
+  test('dependency chip is removed', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    await expect(page.locator('#m-depchip')).toHaveCount(0);
+    await expect(page.locator('.chips .chip')).toHaveCount(3);
+    await expect(page.locator('.bar.violation')).toHaveCount(0);
+  });
+});
+
+// ─── Status treatments ───────────────────────────────────────────────────────
+
+test.describe('Status treatments', () => {
+  test('a done bar keeps full scope colour and gains a hatch', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(v2 => localStorage.setItem('jwx_timeline_state_final', v2), V2([
+      { id: 'viewability', name: 'Ad viewability policy setup', team: 'pubmon', s: 3, dur: 6.5, size: 'XL', scope: 'MVP', status: 'done' },
+    ]));
+    await page.reload();
+    await waitForBars(page);
+    const fill = page.locator('.bar[data-id="viewability"] > .bar-fill');
+    // scope colour is NOT degraded by being done
+    expect(await fill.evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgb(91, 81, 198)');
+    expect(await fill.evaluate(el => getComputedStyle(el).backgroundImage)).toContain('repeating-linear-gradient');
+  });
+
+  test('a done bar label is prefixed with a check', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(v2 => localStorage.setItem('jwx_timeline_state_final', v2), V2([
+      { id: 'viewability', name: 'Ad viewability policy setup', team: 'pubmon', s: 3, dur: 6.5, size: 'XL', scope: 'MVP', status: 'done' },
+    ]));
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.bar[data-id="viewability"] > .bar-label')).toContainText('✓');
+  });
+
+  test('an in-dev bar is masked but its handle is not', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const fillMask = await page.locator('.bar[data-id="jwdata"] > .bar-fill')
+      .evaluate(el => getComputedStyle(el).maskImage || getComputedStyle(el).webkitMaskImage);
+    expect(fillMask).toContain('linear-gradient');
+    const handleMask = await page.locator('.bar[data-id="jwdata"] > .handle')
+      .evaluate(el => getComputedStyle(el).maskImage || getComputedStyle(el).webkitMaskImage);
+    expect(handleMask === 'none' || !handleMask).toBeTruthy();
+  });
+
+  test('legend documents both scopes and both progress states', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const legend = page.locator('.legend');
+    await expect(legend).toContainText('MVP scope');
+    await expect(legend).toContainText('GA scope');
+    await expect(legend).toContainText('Done');
+    await expect(legend).toContainText('In development');
+    await expect(legend.locator('.sw-done')).toHaveCount(1);
+    await expect(legend.locator('.sw-indev')).toHaveCount(1);
+  });
+});
+
+// ─── MVP scope toggle ────────────────────────────────────────────────────────
+
+test.describe('MVP scope toggle', () => {
+  test('every item row has an MVP toggle reflecting its scope', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    await expect(page.locator('.mvpbtn')).toHaveCount(14);
+    await expect(page.locator('.mvpbtn[data-id="viewability"]')).toHaveClass(/\bon\b/);
+    await expect(page.locator('.mvpbtn[data-id="gam"]')).not.toHaveClass(/\bon\b/);
+  });
+
+  test('toggling scope repaints the bar', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    await page.click('.mvpbtn[data-id="gam"]');
+    await expect(page.locator('.bar[data-id="gam"] > .bar-fill'))
+      .toHaveCSS('background-color', 'rgb(91, 81, 198)');
+    await expect(page.locator('.mvpbtn[data-id="gam"]')).toHaveClass(/\bon\b/);
+  });
+
+  test('deselecting the latest MVP item pulls the MVP date earlier', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    // BASELINE MVP ends: playback 9.5+3.5 = 13 is the latest
+    const before = await page.locator('#m-mvp').textContent();
+    await page.click('.mvpbtn[data-id="playback"]');
+    const after = await page.locator('#m-mvp').textContent();
+    expect(after).not.toBe(before);
+    // toggling back restores it
+    await page.click('.mvpbtn[data-id="playback"]');
+    await expect(page.locator('#m-mvp')).toHaveText(before);
+  });
+
+  test('scope survives a reload', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    await page.click('.mvpbtn[data-id="gam"]');
+    await page.click('#save');
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.mvpbtn[data-id="gam"]')).toHaveClass(/\bon\b/);
+  });
+});
+
+// ─── Status cycle ────────────────────────────────────────────────────────────
+
+test.describe('Status cycle', () => {
+  test('the pill shows the current status', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    await expect(page.locator('.statbtn')).toHaveCount(14);
+    await expect(page.locator('.statbtn[data-id="jwdata"]')).toHaveText('in dev');
+    await expect(page.locator('.statbtn[data-id="viewability"]')).toHaveText('planned');
+  });
+
+  test('clicking cycles planned to in dev to done and back', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const pill = page.locator('.statbtn[data-id="viewability"]');
+    await pill.click();
+    await expect(pill).toHaveText('in dev');
+    await pill.click();
+    await expect(pill).toHaveText('done');
+    await expect(page.locator('.bar[data-id="viewability"] > .bar-fill.done')).toHaveCount(1);
+    await pill.click();
+    await expect(pill).toHaveText('planned');
+  });
+
+  test('marking the latest MVP item done does NOT move the MVP date', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const before = await page.locator('#m-mvp').textContent();
+    const gaBefore = await page.locator('#m-ga').textContent();
+    const pill = page.locator('.statbtn[data-id="playback"]');
+    await pill.click();
+    await pill.click();
+    await expect(pill).toHaveText('done');
+    await expect(page.locator('#m-mvp')).toHaveText(before);
+    await expect(page.locator('#m-ga')).toHaveText(gaBefore);
+  });
+
+  test('done state survives a reload', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const pill = page.locator('.statbtn[data-id="gam"]');
+    await pill.click();
+    await pill.click();
+    await page.click('#save');
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.statbtn[data-id="gam"]')).toHaveText('done');
+    await expect(page.locator('.bar[data-id="gam"] > .bar-fill.done')).toHaveCount(1);
+  });
+
+  test('a done bar is still draggable', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const pill = page.locator('.statbtn[data-id="gam"]');
+    await pill.click();
+    await pill.click();
+    const bar = page.locator('.bar[data-id="gam"]');
+    const before = parseFloat(await bar.evaluate(el => el.style.left));
+    const box = await bar.boundingBox();
+    await page.mouse.move(box.x + 20, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 20 + 88, box.y + box.height / 2, { steps: 8 });
+    await page.mouse.up();
+    const after = parseFloat(await page.locator('.bar[data-id="gam"]').evaluate(el => el.style.left));
+    expect(after).toBeGreaterThan(before);
+  });
+});
+
+// ─── Delete items ────────────────────────────────────────────────────────────
+
+test.describe('Delete work items', () => {
+  test('confirming removes the item', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    page.once('dialog', d => d.accept());
+    await page.click('.irm[data-id="midrolls"]');
+    await expect(page.locator('.bar')).toHaveCount(13);
+    await expect(page.locator('.bar[data-id="midrolls"]')).toHaveCount(0);
+  });
+
+  test('dismissing the confirm keeps the item', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    page.once('dialog', d => d.dismiss());
+    await page.click('.irm[data-id="midrolls"]');
+    await page.waitForTimeout(300);
+    await expect(page.locator('.bar')).toHaveCount(14);
+  });
+
+  test('a deleted item stays deleted after reload', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    page.once('dialog', d => d.accept());
+    await page.click('.irm[data-id="midrolls"]');
+    await page.click('#save');
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.bar')).toHaveCount(13);
+    await expect(page.locator('.bar[data-id="midrolls"]')).toHaveCount(0);
+  });
+
+  test('the item delete button does not collide with the team one', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    // .lrm belongs to lane headers only; item rows use .irm
+    await expect(page.locator('.row .gut .lrm')).toHaveCount(0);
+    await expect(page.locator('.lhead .irm')).toHaveCount(0);
+    // The count is the assertion that would actually have failed before the classes
+    // were split: every one of the 14 item rows carries its own item-delete button,
+    // and none of them is a team-delete button wearing the wrong class.
+    await expect(page.locator('.irm')).toHaveCount(14);
+  });
+
+  test('deleting every item leaves a working empty page that survives reload', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(v2 => localStorage.setItem('jwx_timeline_state_final', v2), V2([
+      { id: 'solo', name: 'Last one', team: 'auction', s: 0, dur: 1, size: 'M', scope: 'GA', status: 'planned' },
+    ]));
+    await page.reload();
+    await waitForBars(page);
+    page.once('dialog', d => d.accept());
+    await page.click('.irm[data-id="solo"]');
+    await expect(page.locator('.bar')).toHaveCount(0);
+    await expect(page.locator('#m-mvp')).toHaveText('—');
+    await expect(page.locator('#m-ga')).toHaveText('—');
+    await page.click('#save');
+    await page.reload();
+    await waitForInit(page);
+    await expect(page.locator('.bar')).toHaveCount(0);   // BASELINE must NOT come back
+    await expect(page.locator('#status')).toContainText('No work items');
+  });
+});
+
+// ─── Add work items ──────────────────────────────────────────────────────────
+
+test.describe('Add work items', () => {
+  test('every assignable lane has an add button, inflight does not', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    await expect(page.locator('.ladd')).toHaveCount(3);
+    await expect(page.locator('.ladd[data-team="inflight"]')).toHaveCount(0);
+    await expect(page.locator('.ladd[data-team="exchange"]')).toHaveCount(1);
+  });
+
+  test('a custom lane also gets its own + item button', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    page.once('dialog', d => d.accept('Growth Pod'));
+    await page.click('#addteam');
+    await page.waitForFunction(() =>
+      Array.from(document.querySelectorAll('.lhead')).some(el => el.textContent.includes('Growth Pod')),
+      { timeout: 5_000 }
+    );
+    // The exclusion in render() is L.team!=='inflight' — every non-inflight lane,
+    // including a brand-new custom one, must receive a .ladd button.
+    const lhead = page.locator('.lhead', { hasText: 'Growth Pod' });
+    await expect(lhead.locator('.ladd')).toHaveCount(1);
+  });
+
+  test('adding puts the item in the clicked lane with GA / planned defaults', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    page.once('dialog', d => d.accept('Brand safety controls'));
+    await page.click('.ladd[data-team="auction"]');
+    await expect(page.locator('.bar')).toHaveCount(15);
+    const row = page.locator('.lane[data-team="auction"] .row', { hasText: 'Brand safety controls' });
+    await expect(row).toHaveCount(1);
+    await expect(row.locator('.statbtn')).toHaveText('planned');
+    await expect(row.locator('.mvpbtn')).not.toHaveClass(/\bon\b/);
+  });
+
+  test('the new bar starts at or after the lane last bar end', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    // auction holds only preroll: s=12 dur=2 → new item starts at week 14
+    page.once('dialog', d => d.accept('Follow up work'));
+    await page.click('.ladd[data-team="auction"]');
+    const id = await page.locator('.lane[data-team="auction"] .bar').last().getAttribute('data-id');
+    const left = await page.locator(`.bar[data-id="${id}"]`).evaluate(el => el.style.left);
+    expect(parseFloat(left)).toBeCloseTo(14 * 88, 0);
+  });
+
+  test('adding to an empty lane starts the bar at week 0', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    // addTask() computes start as the end of the lane's last bar, or 0 when the
+    // lane is empty. No default lane is empty at baseline, so add a fresh,
+    // guaranteed-empty custom lane via #addteam to exercise that branch.
+    page.once('dialog', d => d.accept('Empty Lane Co'));
+    await page.click('#addteam');
+    await page.waitForFunction(() =>
+      Array.from(document.querySelectorAll('.lhead')).some(el => el.textContent.includes('Empty Lane Co')),
+      { timeout: 5_000 }
+    );
+    const lhead = page.locator('.lhead', { hasText: 'Empty Lane Co' });
+    page.once('dialog', d => d.accept('First item'));
+    await lhead.locator('.ladd').click();
+    // slugify('First item') -> 'first-item', so addTask() assigns id 'i-first-item'
+    const bar = page.locator('.bar[data-id="i-first-item"]');
+    await expect(bar).toHaveCount(1);
+    const left = await bar.evaluate(el => el.style.left);
+    expect(left).toBe('0px');
+  });
+
+  test('dismissing the prompt adds nothing', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    page.once('dialog', d => d.dismiss());
+    await page.click('.ladd[data-team="exchange"]');
+    await page.waitForTimeout(300);
+    await expect(page.locator('.bar')).toHaveCount(14);
+  });
+
+  test('an added item survives a reload', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    page.once('dialog', d => d.accept('Persisted item'));
+    await page.click('.ladd[data-team="exchange"]');
+    await page.click('#save');
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.bar')).toHaveCount(15);
+    await expect(page.locator('.lane[data-team="exchange"] .row', { hasText: 'Persisted item' })).toHaveCount(1);
+  });
+
+  test('two items with the same name get distinct ids', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    page.once('dialog', d => d.accept('Same name'));
+    await page.click('.ladd[data-team="exchange"]');
+    page.once('dialog', d => d.accept('Same name'));
+    await page.click('.ladd[data-team="exchange"]');
+    await expect(page.locator('.bar')).toHaveCount(16);
+    const ids = await page.locator('.bar').evaluateAll(els => els.map(e => e.dataset.id));
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+// ─── Row gutter layout ────────────────────────────────────────────────────────
+
+test.describe('Row gutter layout', () => {
+  test('the five row controls fit inside the fixed-width gutter on every row', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+
+    // Each row's five controls ([team ▾] [MVP] [status] [size] [✕]) live in one
+    // .ctl. .ctl has no explicit width, and align-items:flex-end on its .gut
+    // parent means .ctl is never stretched to the gutter's width -- it is sized
+    // to its own content (offsetWidth) and then right-anchored inside the fixed
+    // 310px --gutter. If that content needs more room than the gutter's padded
+    // interior, .ctl silently spills past the gutter's left edge (clipped by the
+    // scroll container) instead of wrapping -- flex's default nowrap means it
+    // never wraps, and .ctl has no overflow property, so scrollWidth == its own
+    // offsetWidth regardless of whether it overflowed the gutter. Only a direct
+    // content-vs-available-space measurement against the .gut ancestor catches
+    // this; a same-offsetTop / no-wrap check would pass even while clipped.
+    //
+    // There is no user-triggerable "worst case" row to construct: the .tsel
+    // dropdown is CSS-capped at max-width:78px regardless of team-name length,
+    // and the item name only ever reaches the sibling .nm span (which wraps),
+    // never .ctl. Every .ctl's width is driven entirely by fixed strings (MVP,
+    // planned/in dev/done, a size code, ✕), so checking every row on the
+    // unmodified baseline page is the strongest available test.
+    const rows = await page.locator('.row .gut .ctl').evaluateAll(ctls => ctls.map(ctl => {
+      const gut = ctl.closest('.gut');
+      const cs = getComputedStyle(gut);
+      const available = gut.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      return { needed: ctl.offsetWidth, available, childCount: ctl.children.length };
+    }));
+
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) {
+      expect(r.childCount).toBe(5);
+      expect(r.needed).toBeLessThanOrEqual(r.available);
+    }
+  });
+
+  test('a long added item name does not push gutter content out of its row', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+
+    // The test above reasons only about width. Names come from an uncapped prompt(),
+    // so an added item can be far longer than any BASELINE name: unclamped, this one
+    // wraps to three lines and the gutter's content spills ~7px above and below the
+    // fixed 60px row, colliding with the neighbouring rows' gutters.
+    const LONG = 'Enforce ad viewability policy across every publisher property and reconcile the dashboard totals';
+    page.once('dialog', d => d.accept(LONG));
+    await page.click('.ladd[data-team="auction"]');
+    await expect(page.locator('.bar')).toHaveCount(15);
+
+    const m = await page.evaluate(name => {
+      const measure = nm => {
+        const gut = nm.closest('.gut');
+        const ctl = gut.querySelector('.ctl');
+        const g = gut.getBoundingClientRect(), n = nm.getBoundingClientRect(), c = ctl.getBoundingClientRect();
+        const cs = getComputedStyle(nm);
+        return {
+          rowHeight: gut.closest('.row').getBoundingClientRect().height,
+          gutTop: g.top, gutBottom: g.bottom,
+          contentTop: Math.min(n.top, c.top), contentBottom: Math.max(n.bottom, c.bottom),
+          clientHeight: nm.clientHeight, scrollHeight: nm.scrollHeight,
+          lineHeight: parseFloat(cs.lineHeight), clamp: cs.webkitLineClamp,
+        };
+      };
+      const all = Array.from(document.querySelectorAll('.row .gut .nm'));
+      return {
+        long: measure(all.find(n => n.textContent === name)),
+        // a BASELINE name that already wrapped to two lines before the clamp existed
+        twoLine: measure(all.find(n => n.textContent.startsWith('JW playback'))),
+      };
+    }, LONG);
+
+    expect(m.long.rowHeight).toBeCloseTo(60, 0);
+    expect(m.long.clamp).toBe('2');
+    // the name shows exactly two whole lines …
+    expect(m.long.clientHeight).toBeCloseTo(m.long.lineHeight * 2, 0);
+    // … so the gutter's whole content stays inside the row it belongs to
+    expect(m.long.contentTop).toBeGreaterThanOrEqual(m.long.gutTop - 0.5);
+    expect(m.long.contentBottom).toBeLessThanOrEqual(m.long.gutBottom + 0.5);
+
+    // The clamp must not squeeze a name that already fitted. .gut is a fixed-height
+    // flex column and its children shrink by default, so two lines + gap + .ctl exceed
+    // its padded interior and .nm gets shrunk below the lines it reserved — which
+    // overflow:hidden then clips through the middle of the glyphs. flex-shrink:0
+    // prevents that; without it this is the assertion that fails.
+    expect(m.twoLine.clientHeight).toBeCloseTo(m.twoLine.lineHeight * 2, 0);
+    expect(m.twoLine.scrollHeight).toBeLessThanOrEqual(m.twoLine.clientHeight);
+    expect(m.twoLine.contentBottom).toBeLessThanOrEqual(m.twoLine.gutBottom + 0.5);
   });
 });

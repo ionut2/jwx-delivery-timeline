@@ -68,7 +68,7 @@ jobs:
           PYEOF
 
       - name: Remove test infrastructure from deploy
-        run: rm -rf tests/ playwright.config.js package.json package-lock.json node_modules/
+        run: rm -rf tests/ docs/ playwright.config.js package.json package-lock.json node_modules/
 
       - uses: actions/configure-pages@v4
         with:
