@@ -731,3 +731,71 @@ test.describe('MVP scope toggle', () => {
     await expect(page.locator('.mvpbtn[data-id="gam"]')).toHaveClass(/\bon\b/);
   });
 });
+
+// ─── Status cycle ────────────────────────────────────────────────────────────
+
+test.describe('Status cycle', () => {
+  test('the pill shows the current status', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    await expect(page.locator('.statbtn')).toHaveCount(14);
+    await expect(page.locator('.statbtn[data-id="jwdata"]')).toHaveText('in dev');
+    await expect(page.locator('.statbtn[data-id="viewability"]')).toHaveText('planned');
+  });
+
+  test('clicking cycles planned to in dev to done and back', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const pill = page.locator('.statbtn[data-id="viewability"]');
+    await pill.click();
+    await expect(pill).toHaveText('in dev');
+    await pill.click();
+    await expect(pill).toHaveText('done');
+    await expect(page.locator('.bar[data-id="viewability"] > .bar-fill.done')).toHaveCount(1);
+    await pill.click();
+    await expect(pill).toHaveText('planned');
+  });
+
+  test('marking the latest MVP item done does NOT move the MVP date', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const before = await page.locator('#m-mvp').textContent();
+    const gaBefore = await page.locator('#m-ga').textContent();
+    const pill = page.locator('.statbtn[data-id="playback"]');
+    await pill.click();
+    await pill.click();
+    await expect(pill).toHaveText('done');
+    await expect(page.locator('#m-mvp')).toHaveText(before);
+    await expect(page.locator('#m-ga')).toHaveText(gaBefore);
+  });
+
+  test('done state survives a reload', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const pill = page.locator('.statbtn[data-id="gam"]');
+    await pill.click();
+    await pill.click();
+    await page.click('#save');
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.statbtn[data-id="gam"]')).toHaveText('done');
+    await expect(page.locator('.bar[data-id="gam"] > .bar-fill.done')).toHaveCount(1);
+  });
+
+  test('a done bar is still draggable', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const pill = page.locator('.statbtn[data-id="gam"]');
+    await pill.click();
+    await pill.click();
+    const bar = page.locator('.bar[data-id="gam"]');
+    const before = parseFloat(await bar.evaluate(el => el.style.left));
+    const box = await bar.boundingBox();
+    await page.mouse.move(box.x + 20, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 20 + 88, box.y + box.height / 2, { steps: 8 });
+    await page.mouse.up();
+    const after = parseFloat(await page.locator('.bar[data-id="gam"]').evaluate(el => el.style.left));
+    expect(after).toBeGreaterThan(before);
+  });
+});

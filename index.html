@@ -93,6 +93,10 @@
   .mvpbtn{font-size:10px;font-weight:700;letter-spacing:.03em;border-radius:5px;padding:2px 6px;
     border:1px solid var(--mvp);background:var(--bg);color:var(--mvp-d);cursor:pointer;flex:0 0 auto;}
   .mvpbtn.on{background:var(--mvp);color:#fff;}
+  .statbtn{font-size:10px;border-radius:5px;padding:2px 6px;cursor:pointer;flex:0 0 auto;
+    border:1px solid var(--line);background:var(--bg);color:var(--mut);min-width:46px;}
+  .statbtn.indev{border-color:var(--dev);color:var(--dev-d);background:#FDF3E3;}
+  .statbtn.done{border-color:var(--done);color:var(--done-d);background:#F0F7E6;}
   .lrm{margin-left:auto;cursor:pointer;color:#A32D2D;font-weight:600;font-size:12px;border:none;background:transparent;padding:0 4px;flex:0 0 auto;}
   .lrm:hover{color:#791F1F;}
   .lhead .gut .lname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -183,6 +187,10 @@ function removeTeam(id){
 }
 function toggleScope(id){const t=tasks.find(x=>x.id===id);if(!t)return;
   t.scope=t.scope==='MVP'?'GA':'MVP';render();save();}
+const STATUS_NEXT={planned:'in-dev','in-dev':'done',done:'planned'};
+const STATUS_LABEL={planned:'planned','in-dev':'in dev',done:'done'};
+function cycleStatus(id){const t=tasks.find(x=>x.id===id);if(!t)return;
+  t.status=STATUS_NEXT[t.status]||'planned';render();save();}
 const SCOPE={MVP:{bg:'#5B51C6'},GA:{bg:'#1D9E75'}};
 const BASELINE=[
   {id:'jwdata', name:'JW playback → ad dashboard data (in work, due Jun 15)', team:'pubmon', s:0, dur:5, size:'—', scope:'MVP', status:'in-dev'},
@@ -409,6 +417,12 @@ function render(){
       mb.addEventListener('click',()=>toggleScope(t.id));
       mb.addEventListener('pointerdown',e=>e.stopPropagation());
       ctl.appendChild(mb);
+      const sb=document.createElement('button');sb.className='statbtn '+(t.status==='in-dev'?'indev':t.status);
+      sb.dataset.id=t.id;sb.textContent=STATUS_LABEL[t.status]||t.status;
+      sb.title='Progress: '+(STATUS_LABEL[t.status]||t.status)+' — click to advance';
+      sb.addEventListener('click',()=>cycleStatus(t.id));
+      sb.addEventListener('pointerdown',e=>e.stopPropagation());
+      ctl.appendChild(sb);
       const bd=document.createElement('span');bd.className='badge';
       bd.style.background=SCOPE[t.scope].bg;bd.style.color='#fff';
       bd.textContent=t.size!=='—'?t.size:'·';
