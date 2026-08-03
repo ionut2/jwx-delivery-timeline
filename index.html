@@ -3,7 +3,7 @@
 {
   "name": "Jwx Delivery Timeline",
   "schemaVersion": 1,
-  "description": "Interactive, editable JWX Unified Platform delivery timeline (final baked plan). Drag bars to move, drag the right edge to extend, reassign teams via dropdown or drag; MVP/GA dates and the dependency check recompute live. Edits persist in the browser (localStorage) with Save, Reset, Export, and Import. Self-contained, no external data."
+  "description": "Interactive, editable JWX Unified Platform delivery timeline (final baked plan). Drag bars to move, drag the right edge to extend, reassign teams via dropdown or drag; add and delete work items, mark them planned / in dev / done, and toggle each item between MVP and GA scope. MVP/GA dates recompute live. Edits auto-save to this browser (localStorage) and sync to a shared cloud plan when cloud sync is configured, with Save, Reset, Export, and Import. Self-contained, no external data."
 }
 </script>
 <html lang="en">
@@ -66,7 +66,16 @@
     height:var(--rowh);display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:5px;
     padding:6px 12px;background:var(--bg);border-right:1px solid var(--line);
     text-align:right;font-size:13.5px;}
-  .row .gut .nm{white-space:normal;line-height:1.25;width:100%;text-align:right;}
+  /* Names come from an uncapped prompt(); clamp to two lines so a long one cannot
+     push the gutter's content past the fixed 60px row and collide with its neighbours.
+     The full name stays available on hover via the bar's title.
+     flex-shrink:0 is part of the clamp, not a tweak: .gut is a 60px flex column, so
+     two lines plus the gap plus .ctl already exceed its padded interior and flex
+     would shrink this box below the two lines it just reserved — with overflow:hidden
+     that clips the second line through the middle of the glyphs instead of overflowing. */
+  .row .gut .nm{white-space:normal;line-height:1.25;width:100%;text-align:right;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+    flex-shrink:0;}
   .row .gut .ctl{display:flex;align-items:center;gap:8px;}
   .badge{flex:0 0 auto;font-size:11px;font-weight:600;border-radius:5px;padding:1px 6px;color:#fff;}
   .track{position:relative;height:var(--rowh);}
@@ -200,7 +209,10 @@ function cycleStatus(id){const t=tasks.find(x=>x.id===id);if(!t)return;
 function removeTask(id){const t=tasks.find(x=>x.id===id);if(!t)return;
   if(!window.confirm('Delete "'+t.name+'"? This cannot be undone.'))return;
   tasks=tasks.filter(x=>x.id!==id);
-  render();save();setStatus('Deleted “'+t.name+'”',true);}
+  // setStatus before save(), which ends in markDirty(): with cloud sync on the
+  // '● Unsaved changes' indicator must be what the user is left looking at, the same
+  // way addTeam() orders it.
+  render();setStatus('Deleted “'+t.name+'”',true);save();}
 function addTask(team){
   const name=(window.prompt('New work item name:')||'').trim(); if(!name)return;
   const ids=new Set(tasks.map(t=>t.id)); let base='i-'+slugify(name),id=base,i=2;
@@ -208,7 +220,8 @@ function addTask(team){
   const inLane=tasks.filter(t=>t.team===team);
   const s=inLane.length?Math.max(...inLane.map(t=>t.s+t.dur)):0;
   tasks.push({id,name,team,s,dur:1,size:'M',scope:'GA',status:'planned'});
-  render();save();setStatus('Added “'+name+'” — drag it into place',true);
+  // setStatus before save() — see removeTask: markDirty() must land last.
+  render();setStatus('Added “'+name+'” — drag it into place',true);save();
 }
 const SCOPE={MVP:{bg:'#5B51C6'},GA:{bg:'#1D9E75'}};
 const BASELINE=[
@@ -249,19 +262,43 @@ function sanitizeTasks(arr){
       id:x.id,
       name:typeof x.name==='string'&&x.name?x.name:'Untitled item',
       team:typeof x.team==='string'&&x.team?x.team:FALLBACK_TEAM,
-      s:Number.isFinite(+x.s)&&+x.s>=0?+x.s:0,
-      dur:Number.isFinite(+x.dur)&&+x.dur>=0.5?+x.dur:1,
+      // s/dur are clamped to 520 weeks (~10 years) as well as type-checked: nWeeks()
+      // sizes the grid from s+dur and render() builds nw+1 divs per row, so an absurd
+      // magnitude renders hundreds of thousands of divs and hangs the page during
+      // render() — with every control, including Reset and Import, unreachable.
+      s:Number.isFinite(+x.s)&&+x.s>=0?Math.min(+x.s,520):0,
+      dur:Number.isFinite(+x.dur)&&+x.dur>=0.5?Math.min(+x.dur,520):1,
       size:SIZES.indexOf(x.size)>=0?x.size:'—',
       scope:SCOPES.indexOf(x.scope)>=0?x.scope:'GA',
       status:STATUSES.indexOf(x.status)>=0?x.status:'planned'});
   });
   return out;
 }
+// teams became authoritative alongside tasks at v2, so it needs the same gate:
+// fill/ink go straight into inline style, and an unvalidated value such as
+// url(https://…) would make the page issue a request to an attacker's host.
+const HEXCOLOR=/^#[0-9a-fA-F]{3,8}$/;
+function hexOr(v,fb){return typeof v==='string'&&HEXCOLOR.test(v)?v:fb;}
+function sanitizeTeams(arr){
+  const out=[];
+  (Array.isArray(arr)?arr:[]).forEach(t=>{
+    if(!t||typeof t.team!=='string'||!t.team)return;
+    out.push({
+      team:t.team,
+      short:typeof t.short==='string'&&t.short?t.short:t.team,
+      label:typeof t.label==='string'&&t.label?t.label:'Team '+t.team,
+      // Same neutral pair ensureLanes() gives an unknown team.
+      fill:hexOr(t.fill,'#F1EFE8'),
+      ink:hexOr(t.ink,'#444441'),
+      custom:true});
+  });
+  return out;
+}
 // v1 only ever persisted s/dur/team, so scope/status come from BASELINE for free.
 function migrateV1(arr){return BASELINE.map(b=>{const s=arr.find(x=>x&&x.id===b.id);
   return s?Object.assign(clone(b),{
-    s:Number.isFinite(+s.s)?Math.max(0,+s.s):b.s,
-    dur:Number.isFinite(+s.dur)?Math.max(0.5,+s.dur):b.dur,
+    s:Number.isFinite(+s.s)?Math.min(Math.max(0,+s.s),520):b.s,
+    dur:Number.isFinite(+s.dur)?Math.min(Math.max(0.5,+s.dur),520):b.dur,
     team:s.team||b.team}):clone(b);});}
 // Returns a task array, or null when the payload is unusable and the caller
 // should fall back to BASELINE. Note [] is a legitimate return value: an
@@ -278,10 +315,14 @@ function tasksFromPayload(data){
   const out=sanitizeTasks(arr);
   return out.length?out:null;
 }
+// Records whether the plan on screen came from saved local state or from BASELINE.
+// init() needs the distinction: under v2 a local plan can be anything at all, so
+// "Baseline plan" is only an honest thing to say when nothing was restored.
+let loadedFromLocal=false;
 function load(){
   try{const r=localStorage.getItem(KEY);
     if(r){const out=tasksFromPayload(JSON.parse(r));
-      if(out)return out;}   // [] is truthy — an empty plan is honoured here
+      if(out){loadedFromLocal=true;return out;}}   // [] is truthy — an empty plan is honoured here
   }catch(e){}
   return clone(BASELINE);
 }
@@ -347,11 +388,13 @@ async function init(){
   }
   const arr=tasksFromPayload(data);
   if(arr===null){
-    setStatus('Baseline plan — cloud storage is empty',false);
+    // The bin holds nothing usable, so whatever is on screen came from this browser.
+    if(loadedFromLocal)setStatus('Cloud is empty — your local plan will be published on the next save',false);
+    else setStatus('Baseline plan — cloud storage is empty',false);
     return;
   }
   if(data&&Array.isArray(data.teams)){
-    LANES=DEFAULT_LANES.concat(data.teams.filter(t=>t&&t.team).map(t=>Object.assign({},t,{custom:true})));
+    LANES=DEFAULT_LANES.concat(sanitizeTeams(data.teams));
     saveTeams();
   }
   tasks=arr;ensureLanes();render();
@@ -371,7 +414,7 @@ function importState(file){const fr=new FileReader();
     const arr=tasksFromPayload(data);
     if(arr===null)throw 0;
     if(data&&Array.isArray(data.teams)){
-      LANES=DEFAULT_LANES.concat(data.teams.filter(t=>t&&t.team).map(t=>Object.assign({},t,{custom:true})));saveTeams();}
+      LANES=DEFAULT_LANES.concat(sanitizeTeams(data.teams));saveTeams();}
     tasks=arr;ensureLanes();render();save();saveToCloud('Imported');setStatus('Imported plan from '+file.name,true);}
     catch(e){setStatus('Import failed — not a valid timeline JSON file',false);}};
   fr.readAsText(file);}
@@ -385,7 +428,10 @@ function startDate(t){return bizDate(t.s*5+1);}
 function endDate(t){return bizDate((t.s+t.dur)*5);}
 function durLabel(t){const bd=Math.round(t.dur*5);return t.dur>=1?(Number.isInteger(t.dur)?t.dur+'w':t.dur+'w')+' · '+bd+'bd':bd+' bd';}
 
-function nWeeks(){let m=12;tasks.forEach(t=>m=Math.max(m,Math.ceil(t.s+t.dur)));return m+2;}
+// The 600-week ceiling is the last line of defence behind sanitizeTasks/migrateV1:
+// render() builds nw+1 gridcol divs per row, so any future load path that sets s/dur
+// without going through a validator still cannot hang the page.
+function nWeeks(){let m=12;tasks.forEach(t=>m=Math.max(m,Math.ceil(t.s+t.dur)));return Math.min(m+2,600);}
 
 function render(){
   const inner=document.getElementById('inner');
@@ -479,8 +525,8 @@ function buildBar(t){
   // mask for in-dev items, and a mask applies to its whole subtree — nesting the
   // handle would fade out the drag-to-extend affordance.
   const hd=document.createElement('div');hd.className='handle';bar.appendChild(hd);
-  bar.addEventListener('pointerdown',e=>{if(e.target===hd)return;startDrag(e,t,'move');});
-  hd.addEventListener('pointerdown',e=>{e.stopPropagation();startDrag(e,t,'resize');});
+  bar.addEventListener('pointerdown',e=>{if(e.target===hd)return;startDrag(e,t,'move',bar);});
+  hd.addEventListener('pointerdown',e=>{e.stopPropagation();startDrag(e,t,'resize',bar);});
   positionBar(bar,t);
   return bar;
 }
@@ -491,14 +537,19 @@ function positionBar(bar,t){
   bar.style.left=(t.s*WEEKW)+'px';bar.style.width=Math.max(18,t.dur*WEEKW)+'px';
   const fill=bar.querySelector('.bar-fill');
   fill.className='bar-fill'+(t.status==='done'?' done':t.status==='in-dev'?' indev':'');
+  // The backgroundColor longhand is required here: the `background` shorthand also
+  // writes an inline background-image:none, which outranks .bar-fill.done{background-image:var(--hatch)}
+  // and silently kills the done hatch.
   fill.style.backgroundColor=SCOPE[t.scope].bg;
   bar.querySelector('.bar-label').textContent=barLabel(t);
   bar.title=t.name+'\n'+(t.size!=='—'?'Size '+t.size+' · ':'')+durLabel(t)+'\n'+fmt(startDate(t))+' → '+fmt(endDate(t));
 }
 
-function startDrag(e,t,mode){
+// bar is passed in from buildBar's closure rather than looked up by id: an id from
+// import or cloud can contain " or ], which makes an interpolated selector throw and
+// silently kills the drag.
+function startDrag(e,t,mode,bar){
   e.preventDefault();
-  const bar=document.querySelector('.bar[data-id="'+t.id+'"]');
   const startX=e.clientX,startY=e.clientY,origS=t.s,origD=t.dur;
   if(mode==='move')bar.classList.add('dragging');
   function highlight(y){document.querySelectorAll('.lane.drop').forEach(l=>l.classList.remove('drop'));
