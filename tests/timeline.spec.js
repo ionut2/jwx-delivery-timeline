@@ -872,6 +872,21 @@ test.describe('Add work items', () => {
     await expect(page.locator('.ladd[data-team="exchange"]')).toHaveCount(1);
   });
 
+  test('a custom lane also gets its own + item button', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    page.once('dialog', d => d.accept('Growth Pod'));
+    await page.click('#addteam');
+    await page.waitForFunction(() =>
+      Array.from(document.querySelectorAll('.lhead')).some(el => el.textContent.includes('Growth Pod')),
+      { timeout: 5_000 }
+    );
+    // The exclusion in render() is L.team!=='inflight' — every non-inflight lane,
+    // including a brand-new custom one, must receive a .ladd button.
+    const lhead = page.locator('.lhead', { hasText: 'Growth Pod' });
+    await expect(lhead.locator('.ladd')).toHaveCount(1);
+  });
+
   test('adding puts the item in the clicked lane with GA / planned defaults', async ({ page }) => {
     await page.goto('/');
     await waitForBars(page);
@@ -893,6 +908,28 @@ test.describe('Add work items', () => {
     const id = await page.locator('.lane[data-team="auction"] .bar').last().getAttribute('data-id');
     const left = await page.locator(`.bar[data-id="${id}"]`).evaluate(el => el.style.left);
     expect(parseFloat(left)).toBeCloseTo(14 * 88, 0);
+  });
+
+  test('adding to an empty lane starts the bar at week 0', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    // addTask() computes start as the end of the lane's last bar, or 0 when the
+    // lane is empty. No default lane is empty at baseline, so add a fresh,
+    // guaranteed-empty custom lane via #addteam to exercise that branch.
+    page.once('dialog', d => d.accept('Empty Lane Co'));
+    await page.click('#addteam');
+    await page.waitForFunction(() =>
+      Array.from(document.querySelectorAll('.lhead')).some(el => el.textContent.includes('Empty Lane Co')),
+      { timeout: 5_000 }
+    );
+    const lhead = page.locator('.lhead', { hasText: 'Empty Lane Co' });
+    page.once('dialog', d => d.accept('First item'));
+    await lhead.locator('.ladd').click();
+    // slugify('First item') -> 'first-item', so addTask() assigns id 'i-first-item'
+    const bar = page.locator('.bar[data-id="i-first-item"]');
+    await expect(bar).toHaveCount(1);
+    const left = await bar.evaluate(el => el.style.left);
+    expect(left).toBe('0px');
   });
 
   test('dismissing the prompt adds nothing', async ({ page }) => {
@@ -926,5 +963,51 @@ test.describe('Add work items', () => {
     await expect(page.locator('.bar')).toHaveCount(16);
     const ids = await page.locator('.bar').evaluateAll(els => els.map(e => e.dataset.id));
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+// ─── Row gutter layout ────────────────────────────────────────────────────────
+
+test.describe('Row gutter layout', () => {
+  test('the five row controls fit inside the fixed-width gutter, even with a long item name and long team name', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+
+    // Give the dropdown a long selected-option label too: add a custom team with
+    // a deliberately long name and reassign the longest-named baseline item to
+    // it via the in-row .tsel dropdown -- the worst case for horizontal space.
+    page.once('dialog', d => d.accept('International Ad Operations & Compliance'));
+    await page.click('#addteam');
+    await page.waitForFunction(() =>
+      Array.from(document.querySelectorAll('.lhead')).some(el => el.textContent.includes('International Ad Operations & Compliance')),
+      { timeout: 5_000 }
+    );
+    const row = page.locator('.row', { hasText: 'Ad server segmentation (multi-property)' });
+    await row.locator('.tsel').selectOption({ label: 'International Ad Operations & Compliance' });
+    await expect(row.locator('.tsel')).toHaveValue(/^t-/);
+
+    // Each row's five controls ([team ▾] [MVP] [status] [size] [✕]) live in one
+    // .ctl. .ctl has no explicit width, and align-items:flex-end on its .gut
+    // parent means .ctl is never stretched to the gutter's width -- it is sized
+    // to its own content (offsetWidth) and then right-anchored inside the fixed
+    // 310px --gutter. If that content needs more room than the gutter's padded
+    // interior, .ctl silently spills past the gutter's left edge (clipped by the
+    // scroll container) instead of wrapping -- flex's default nowrap means it
+    // never wraps, and .ctl has no overflow property, so scrollWidth == its own
+    // offsetWidth regardless of whether it overflowed the gutter. Only a direct
+    // content-vs-available-space measurement against the .gut ancestor catches
+    // this; a same-offsetTop / no-wrap check would pass even while clipped.
+    const rows = await page.locator('.row .gut .ctl').evaluateAll(ctls => ctls.map(ctl => {
+      const gut = ctl.closest('.gut');
+      const cs = getComputedStyle(gut);
+      const available = gut.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      return { needed: ctl.offsetWidth, available, childCount: ctl.children.length };
+    }));
+
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) {
+      expect(r.childCount).toBe(5);
+      expect(r.needed).toBeLessThanOrEqual(r.available);
+    }
   });
 });
