@@ -467,7 +467,9 @@ function tasksFromPayload(data){
   const arr=Array.isArray(data)?data:(data&&data.tasks);
   if(!Array.isArray(arr))return null;
   const v=Array.isArray(data)?1:(+(data.version)||1);
-  if(v<2)return migrateV1(arr);
+  // An empty v1 array carries no information — v1 stored overlays only, so it
+  // cannot mean "the plan was emptied". That meaning exists only in v2.
+  if(v<2)return arr.length?migrateV1(arr):null;
   if(arr.length===0)return [];
   const out=sanitizeTasks(arr);
   return out.length?out:null;

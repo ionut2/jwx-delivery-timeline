@@ -109,10 +109,13 @@ Applies identically to localStorage, the cloud read, and Import:
 
 ```
 payload
-  ├─ unparseable, or `tasks` is not an array → clone(BASELINE)
-  ├─ version >= 2 and `tasks` is an array    → sanitizeTasks(tasks)     ← including []
-  └─ bare array, or version absent or 1      → migrateV1(tasks)
+  ├─ unparseable, or `tasks` is not an array      → clone(BASELINE)
+  ├─ version >= 2, `tasks` is an array            → sanitizeTasks(tasks)   ← including []
+  ├─ bare array / version absent or 1, non-empty  → migrateV1(tasks)
+  └─ bare array / version absent or 1, empty      → clone(BASELINE)
 ```
+
+The last branch matters: an empty **v1** array carries no information, because v1 only ever stored positional overlays. It cannot mean "the plan was emptied" — that meaning exists only from v2 on. Reading it as an empty plan would let an empty imported file silently wipe a plan, and would break the pre-existing `importState` guard and the `'cloud storage is empty'` branch, both of which already treated an empty v1 array as nothing-to-load.
 
 ### Empty list is a legal state
 
