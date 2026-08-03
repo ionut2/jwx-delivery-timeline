@@ -192,16 +192,56 @@ const BASELINE=[
 const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 const KEY='jwx_timeline_state_final';
+const SCHEMA_VERSION=2;
+const SIZES=['S','M','L','XL','—'];
+const SCOPES=['MVP','GA'];
+const STATUSES=['planned','in-dev','done'];
+const FALLBACK_TEAM='pubmon';
 function clone(a){return JSON.parse(JSON.stringify(a));}
-// Merge-load: BASELINE supplies items + static fields (name/type/size/flags);
-// saved state overlays the user's editable fields (start, duration, team).
+function payload(){return {app:'jwx-timeline',version:SCHEMA_VERSION,exportedAt:new Date().toISOString(),
+  teams:LANES.filter(l=>l.custom),tasks};}
+// Saved state is authoritative from v2 on, so every load path runs through this
+// gate — a malformed payload must not be able to break the page.
+function sanitizeTasks(arr){
+  const seen=new Set(),out=[];
+  arr.forEach(x=>{
+    if(!x||typeof x.id!=='string'||!x.id||seen.has(x.id))return;
+    seen.add(x.id);
+    out.push({
+      id:x.id,
+      name:typeof x.name==='string'&&x.name?x.name:'Untitled item',
+      team:typeof x.team==='string'&&x.team?x.team:FALLBACK_TEAM,
+      s:Number.isFinite(+x.s)&&+x.s>=0?+x.s:0,
+      dur:Number.isFinite(+x.dur)&&+x.dur>=0.5?+x.dur:1,
+      size:SIZES.indexOf(x.size)>=0?x.size:'—',
+      scope:SCOPES.indexOf(x.scope)>=0?x.scope:'GA',
+      status:STATUSES.indexOf(x.status)>=0?x.status:'planned'});
+  });
+  return out;
+}
+// v1 only ever persisted s/dur/team, so scope/status come from BASELINE for free.
+function migrateV1(arr){return BASELINE.map(b=>{const s=arr.find(x=>x&&x.id===b.id);
+  return s?Object.assign(clone(b),{
+    s:Number.isFinite(+s.s)?Math.max(0,+s.s):b.s,
+    dur:Number.isFinite(+s.dur)?Math.max(0.5,+s.dur):b.dur,
+    team:s.team||b.team}):clone(b);});}
+// Returns a task array, or null when the payload is unusable and the caller
+// should fall back to BASELINE. Note [] is a legitimate return value: an
+// explicitly empty v2 plan is respected, while a non-empty payload that
+// sanitizes down to nothing is corruption.
+function tasksFromPayload(data){
+  const arr=Array.isArray(data)?data:(data&&data.tasks);
+  if(!Array.isArray(arr))return null;
+  const v=Array.isArray(data)?1:(+(data.version)||1);
+  if(v<2)return migrateV1(arr);
+  if(arr.length===0)return [];
+  const out=sanitizeTasks(arr);
+  return out.length?out:null;
+}
 function load(){
   try{const r=localStorage.getItem(KEY);
-    if(r){let saved=JSON.parse(r);
-      // migration: prefetch is now an active MVP item — ignore stale "done/in-flight" override
-      saved=saved.filter(x=>!(x.id==='prefetch' && x.team==='inflight'));
-      return BASELINE.map(b=>{const s=saved.find(x=>x.id===b.id);
-        return s?Object.assign(clone(b),{s:+s.s,dur:+s.dur,team:s.team}):clone(b);});}
+    if(r){const out=tasksFromPayload(JSON.parse(r));
+      if(out)return out;}   // [] is truthy — an empty plan is honoured here
   }catch(e){}
   return clone(BASELINE);
 }
@@ -210,20 +250,19 @@ ensureLanes();
 function setStatus(txt,state){const el=document.getElementById('status');if(!el)return;
   el.textContent=txt;
   el.style.color=state===true||state==='ok'?'var(--ga-d)':state==='warn'?'#B45309':state==='err'?'var(--err)':'var(--mut)';}
-function save(){try{localStorage.setItem(KEY,JSON.stringify(tasks));localStorage.setItem(KEY+'_ts',Date.now());saveTeams();
+function save(){try{localStorage.setItem(KEY,JSON.stringify(payload()));localStorage.setItem(KEY+'_ts',Date.now());saveTeams();
     if(!cloudEnabled())setStatus('Saved '+new Date().toLocaleTimeString()+' — reloads on refresh',true);}
   catch(e){setStatus('Could not save — browser storage is blocked',false);}
   markDirty();}
 async function saveToCloud(label){
   if(!cloudEnabled())return;
   setStatus('Saving to cloud…');
-  const payload={app:'jwx-timeline',version:1,exportedAt:new Date().toISOString(),
-    teams:LANES.filter(l=>l.custom),tasks};
+  const p=payload();
   try{
     const r=await fetch('https://api.jsonbin.io/v3/b/'+CLOUD_BIN_ID,{
       method:'PUT',
       headers:{'Content-Type':'application/json','X-Master-Key':CLOUD_API_KEY},
-      body:JSON.stringify(payload)});
+      body:JSON.stringify(p)});
     if(!r.ok)throw new Error('HTTP '+r.status);
     isDirty=false;
     if(autoSaveTimer){clearTimeout(autoSaveTimer);autoSaveTimer=null;}
@@ -254,6 +293,7 @@ async function loadFromCloud(){
 async function init(){
   if(!cloudEnabled()){
     let raw=null;try{raw=localStorage.getItem(KEY);}catch(e){}
+    if(!tasks.length){setStatus('No work items — add one from a lane, or Reset to baseline',false);return;}
     if(raw){const ts=parseInt(localStorage.getItem(KEY+'_ts'))||0;
       setStatus('Restored your saved edits'+(ts?(' from '+new Date(ts).toLocaleString()):''),true);}
     else setStatus('Baseline plan — every change auto-saves to this browser',false);
@@ -265,8 +305,8 @@ async function init(){
     setStatus('⚠ Cloud unavailable — working offline','err');
     return;
   }
-  const arr=Array.isArray(data)?data:(data&&data.tasks);
-  if(!Array.isArray(arr)||!arr.length){
+  const arr=tasksFromPayload(data);
+  if(arr===null){
     setStatus('Baseline plan — cloud storage is empty',false);
     return;
   }
@@ -274,28 +314,25 @@ async function init(){
     LANES=DEFAULT_LANES.concat(data.teams.filter(t=>t&&t.team).map(t=>Object.assign({},t,{custom:true})));
     saveTeams();
   }
-  tasks=applyOverlay(arr);ensureLanes();render();
+  tasks=arr;ensureLanes();render();
+  if(!tasks.length){setStatus('No work items — add one from a lane, or Reset to baseline',false);return;}
   const when=data.exportedAt?(' — '+new Date(data.exportedAt).toLocaleString()):'';
   setStatus('Synced from cloud'+when,'ok');
 }
 function clearSaved(){try{localStorage.removeItem(KEY);localStorage.removeItem(KEY+'_ts');}catch(e){}}
-function applyOverlay(arr){return BASELINE.map(b=>{const s=arr.find(x=>x.id===b.id);
-  return s?Object.assign(clone(b),{
-    s:Number.isFinite(+s.s)?Math.max(0,+s.s):b.s,
-    dur:Number.isFinite(+s.dur)?Math.max(0.5,+s.dur):b.dur,
-    team:s.team||b.team}):clone(b);});}
-function exportState(){const payload={app:'jwx-timeline',version:1,exportedAt:new Date().toISOString(),teams:LANES.filter(l=>l.custom),tasks};
-  const text=JSON.stringify(payload,null,2);
+function exportState(){const p=payload();
+  const text=JSON.stringify(p,null,2);
   const blob=new Blob([text],{type:'application/json'});const url=URL.createObjectURL(blob);
   const a=document.createElement('a');a.href=url;a.download='jwx-timeline-'+new Date().toISOString().slice(0,10)+'.json';
   document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
   setStatus('Exported plan to a JSON file',true);}
 function importState(file){const fr=new FileReader();
-  fr.onload=()=>{try{const data=JSON.parse(fr.result);const arr=Array.isArray(data)?data:(data&&data.tasks);
-    if(!Array.isArray(arr)||!arr.length)throw 0;
+  fr.onload=()=>{try{const data=JSON.parse(fr.result);
+    const arr=tasksFromPayload(data);
+    if(arr===null)throw 0;
     if(data&&Array.isArray(data.teams)){
       LANES=DEFAULT_LANES.concat(data.teams.filter(t=>t&&t.team).map(t=>Object.assign({},t,{custom:true})));saveTeams();}
-    tasks=applyOverlay(arr);ensureLanes();render();save();saveToCloud('Imported');setStatus('Imported plan from '+file.name,true);}
+    tasks=arr;ensureLanes();render();save();saveToCloud('Imported');setStatus('Imported plan from '+file.name,true);}
     catch(e){setStatus('Import failed — not a valid timeline JSON file',false);}};
   fr.readAsText(file);}
 function snap(v){return Math.round(v*2)/2;}

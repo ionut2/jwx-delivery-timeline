@@ -39,13 +39,13 @@ async function waitForBars(page) {
  *   PUT  /v3/b/:id        → { record: <request body>, metadata: { id: 'test' } }
  *   fail = true           → abort the connection
  */
-async function mockCloud(page, { data = null, fail = false } = {}) {
+async function mockCloud(page, { data = null, fail = false, version = 1 } = {}) {
   await page.route('**/api.jsonbin.io/**', async route => {
     if (fail) { await route.abort('failed'); return; }
 
     if (route.request().method() === 'GET') {
       const record = data
-        ? { app: 'jwx-timeline', version: 1, exportedAt: new Date().toISOString(), teams: [], tasks: data }
+        ? { app: 'jwx-timeline', version, exportedAt: new Date().toISOString(), teams: [], tasks: data }
         : {};
       await route.fulfill({
         status: 200,
@@ -139,7 +139,7 @@ test.describe('Export', () => {
     await dl.saveAs(tmp);
     const data = JSON.parse(fs.readFileSync(tmp, 'utf8'));
     expect(data.app).toBe('jwx-timeline');
-    expect(data.version).toBe(1);
+    expect(data.version).toBe(2);
     expect(data.exportedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(Array.isArray(data.tasks)).toBe(true);
     expect(data.tasks).toHaveLength(14);
@@ -212,12 +212,17 @@ test.describe('Import', () => {
     await expect(page.locator('#status')).toContainText('failed', { timeout: 5_000 });
   });
 
-  test('importing JSON with empty tasks array shows error status', async ({ page }) => {
+  test('importing a versionless empty tasks array falls back to BASELINE, not an error', async ({ page }) => {
+    // No `version` key defaults to v1 migration, which is unconditionally BASELINE-anchored:
+    // an empty overlay array just means "no overrides," same as the v1 cloud/load paths.
+    // This is not the v2 "explicitly empty plan" case — that requires version:2.
     await page.goto('/');
+    await waitForBars(page);
     const tmp = path.join(os.tmpdir(), `empty-${Date.now()}.json`);
     fs.writeFileSync(tmp, JSON.stringify({ app: 'jwx-timeline', tasks: [] }));
     await page.locator('#importFile').setInputFiles(tmp);
-    await expect(page.locator('#status')).toContainText('failed', { timeout: 5_000 });
+    await expect(page.locator('#status')).toContainText('Imported', { timeout: 5_000 });
+    await expect(page.locator('.bar')).toHaveCount(14);
   });
 
   test('timeline still shows 14 bars after a failed import', async ({ page }) => {
@@ -252,15 +257,103 @@ test.describe('Save & Persistence', () => {
     await expect(page.locator('#status')).toContainText('Restored');
   });
 
-  test('save writes tasks to localStorage', async ({ page }) => {
+  test('save writes a v2 envelope to localStorage', async ({ page }) => {
     await page.goto('/');
     await waitForBars(page);
     await page.click('#save');
     const stored = await page.evaluate(() => localStorage.getItem('jwx_timeline_state_final'));
     expect(stored).not.toBeNull();
     const parsed = JSON.parse(stored);
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed).toHaveLength(14);
+    expect(parsed.version).toBe(2);
+    expect(Array.isArray(parsed.tasks)).toBe(true);
+    expect(parsed.tasks).toHaveLength(14);
+  });
+});
+
+// ─── Persistence v2 ──────────────────────────────────────────────────────────
+
+const V2 = (tasks) => JSON.stringify({
+  app: 'jwx-timeline', version: 2, exportedAt: '2026-08-03T00:00:00.000Z', teams: [], tasks,
+});
+
+test.describe('Persistence v2', () => {
+  test('a v1 bare array migrates with positions preserved', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(() => localStorage.setItem('jwx_timeline_state_final',
+      JSON.stringify([{ id: 'viewability', s: 7, dur: 6.5, team: 'auction' }])));
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.bar')).toHaveCount(14);
+    const left = await page.locator('.bar[data-id="viewability"]').evaluate(el => el.style.left);
+    expect(parseFloat(left)).toBeCloseTo(7 * 88, 0);
+    // scope/status come from BASELINE, which v1 never persisted
+    await expect(page.locator('.bar[data-id="jwdata"] > .bar-fill.indev')).toHaveCount(1);
+  });
+
+  test('a v2 payload is loaded verbatim, including a deleted item', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(v2 => localStorage.setItem('jwx_timeline_state_final', v2), V2([
+      { id: 'viewability', name: 'Ad viewability policy setup', team: 'pubmon', s: 3, dur: 6.5, size: 'XL', scope: 'MVP', status: 'done' },
+      { id: 'gam', name: 'GAM mediation Spotlight (pre-roll)', team: 'exchange', s: 1, dur: 5.5, size: 'L', scope: 'GA', status: 'planned' },
+    ]));
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.bar')).toHaveCount(2);
+    await expect(page.locator('.bar[data-id="playback"]')).toHaveCount(0);
+  });
+
+  test('an explicitly empty v2 plan stays empty across reload', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(v2 => localStorage.setItem('jwx_timeline_state_final', v2), V2([]));
+    await page.reload();
+    await waitForInit(page);
+    await expect(page.locator('.bar')).toHaveCount(0);
+    await expect(page.locator('#status')).toContainText('No work items');
+    await expect(page.locator('#m-mvp')).toHaveText('—');
+  });
+
+  test('a corrupt payload falls back to BASELINE', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(() => localStorage.setItem('jwx_timeline_state_final',
+      JSON.stringify({ app: 'jwx-timeline', version: 2, tasks: 'not-an-array' })));
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.bar')).toHaveCount(14);
+  });
+
+  test('a v2 payload whose every item is invalid falls back to BASELINE', async ({ page }) => {
+    await page.goto('/');
+    // items with no usable id sanitize away — that is corruption, not an empty plan
+    await page.evaluate(v2 => localStorage.setItem('jwx_timeline_state_final', v2),
+      V2([{ name: 'no id' }, { id: '', name: 'blank id' }]));
+    await page.reload();
+    await waitForBars(page);
+    await expect(page.locator('.bar')).toHaveCount(14);
+  });
+
+  test('sanitizeTasks coerces out-of-range and unknown values', async ({ page }) => {
+    await page.goto('/');
+    await waitForBars(page);
+    const out = await page.evaluate(() => window.sanitizeTasks([
+      { id: 'a', scope: 'nonsense', status: 'wat', dur: -5, s: -3, size: 'XXL' },
+      { id: 'b', name: 'ok', team: 'exchange', s: 2, dur: 1.5, size: 'M', scope: 'MVP', status: 'done' },
+      { id: 'a', name: 'duplicate id' },
+      { name: 'no id at all' },
+    ]));
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({ id: 'a', name: 'Untitled item', team: 'pubmon', s: 0, dur: 1, size: '—', scope: 'GA', status: 'planned' });
+    expect(out[1]).toMatchObject({ id: 'b', scope: 'MVP', status: 'done', dur: 1.5 });
+  });
+
+  test('a v2 cloud payload is loaded verbatim', async ({ page }) => {
+    await mockCloud(page, {
+      version: 2,
+      data: [{ id: 'solo', name: 'Only item', team: 'auction', s: 4, dur: 2, size: 'M', scope: 'MVP', status: 'done' }],
+    });
+    await page.goto('/test-index.html');
+    await expect(page.locator('#status')).toContainText('Synced from cloud', { timeout: 10_000 });
+    await expect(page.locator('.bar')).toHaveCount(1);
+    await expect(page.locator('.bar[data-id="solo"] > .bar-fill.done')).toHaveCount(1);
   });
 });
 
